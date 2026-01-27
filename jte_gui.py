@@ -9,6 +9,9 @@ from collections import deque
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
+import json
+import os
+import socket
 
 """
 CONCETTI BASE DI TKINTER / CUSTOMTKINTER:
@@ -148,15 +151,27 @@ class JTEApp(ctk.CTk):
                                            command=self.disconnect)
         self.btn_disconnect.pack(pady=5, padx=10)
 
-        # Sezione TCP per ESP32 WiFi
-        ctk.CTkLabel(self.navigation_frame, text="WiFi Bridge", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(20, 0))
-        self.tcp_ip_var = ctk.StringVar(value="192.168.1.15") # Valore di default indicativo
-        self.tcp_entry = ctk.CTkEntry(self.navigation_frame, textvariable=self.tcp_ip_var, placeholder_text="IP ESP32")
-        self.tcp_entry.pack(pady=5, padx=10)
+        # Carica IP salvati
+        self.config_file = "config.json"
+        config = self.load_config()
+        self.wifi_devices = config.get("wifi_devices", {"192.168.50.100": "Default"})
         
-        self.btn_connect_tcp = ctk.CTkButton(self.navigation_frame, text="Connect WiFi Bridge", 
-                                            command=lambda: self.connect_serial(self.tcp_ip_var.get(), is_tcp=True))
-        self.btn_connect_tcp.pack(pady=5, padx=10)
+        # Sezione WiFi aggiornata con Dropdown e Scan
+        ctk.CTkLabel(self.navigation_frame, text="WiFi Bridge", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(20, 0))
+        
+        # Prepariamo la lista per il dropdown: "Nome (IP)"
+        self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
+        
+        self.tcp_device_var = ctk.StringVar(value=self.wifi_display_list[0] if self.wifi_display_list else "")
+        self.tcp_menu = ctk.CTkOptionMenu(self.navigation_frame, variable=self.tcp_device_var, 
+                                         values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
+                                         command=self.on_connect_wifi_click)
+        self.tcp_menu.pack(pady=5, padx=10)
+        
+        self.btn_scan_tcp = ctk.CTkButton(self.navigation_frame, text="Scan Network", 
+                                         fg_color="#1f538d", hover_color="#14375e",
+                                         command=self.start_scan)
+        self.btn_scan_tcp.pack(pady=5, padx=10)
 
         self.table_buttons = [] # Lista per tenere traccia dei pulsanti delle tabelle creati dinamicamente
         self.table_btns_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
@@ -190,6 +205,12 @@ class JTEApp(ctk.CTk):
         """Rileva le porte seriali disponibili e aggiorna il menu."""
         ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_menu.configure(values=ports if ports else ["Nessuna Porta"])
+
+    def on_connect_wifi_click(self, selection):
+        # Estrae l'IP dalla stringa "Nome (IP)"
+        if "(" in selection and ")" in selection:
+            ip = selection.split("(")[1].split(")")[0]
+            self.connect_serial(ip, is_tcp=True)
 
     def connect_serial(self, port, is_tcp=False):
         """Inizializza la comunicazione (seriale o TCP) sulla porta selezionata."""
@@ -239,6 +260,90 @@ class JTEApp(ctk.CTk):
             child.destroy()
         self.var_rows = {}
         self.clear_plot_data()
+
+    def load_config(self):
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r") as f:
+                    return json.load(f)
+            except: pass
+        return {}
+
+    def save_config(self):
+        config = {"wifi_devices": self.wifi_devices}
+        try:
+            with open(self.config_file, "w") as f:
+                json.dump(config, f)
+        except: pass
+
+    def start_scan(self):
+        self.btn_scan_tcp.configure(text="Scanning...", state="disabled")
+        threading.Thread(target=self.scan_network_thread, daemon=True).start()
+
+    def scan_network_thread(self):
+        found_devices = {} # IP -> Name
+        try:
+            # Ottieni IP locale per determinare la subnet
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            
+            prefix = ".".join(local_ip.split(".")[:-1]) + "."
+            
+            threads = []
+            def check_ip(ip):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.5)
+                    result = sock.connect_ex((ip, 9000))
+                    if result == 0:
+                        # Prova a chiedere il nome
+                        sock.sendall(b"AT+NAME?\r\n")
+                        # Aspetta una risposta breve (es: "+NAME=PARIS OK")
+                        raw_name = sock.recv(64).decode('ascii', errors='ignore').strip()
+                        
+                        name_resp = ""
+                        if "+NAME=" in raw_name:
+                            # Estrae la parte dopo "+NAME=" e prende solo fino al primo ritorno a capo
+                            name_resp = raw_name.split("+NAME=")[1].split("\r")[0].split("\n")[0].strip()
+                        
+                        if not name_resp or "AT+" in name_resp:
+                            name_resp = "ESP32-Bridge"
+                        found_devices[ip] = name_resp
+                    sock.close()
+                except: pass
+
+            for i in range(1, 255):
+                t = threading.Thread(target=check_ip, args=(prefix + str(i),))
+                t.start()
+                threads.append(t)
+            
+            for t in threads:
+                t.join()
+                
+        except Exception as e:
+            print(f"Scan error: {e}")
+        
+        # Aggiorna UI
+        self.after(0, lambda: self.finish_scan(found_devices))
+
+    def finish_scan(self, found_devices):
+        self.btn_scan_tcp.configure(text="Scan Network", state="normal")
+        if found_devices:
+            # Aggiorna il dizionario locale
+            self.wifi_devices.update(found_devices)
+            
+            # Rigenera la lista display
+            self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
+            self.tcp_menu.configure(values=self.wifi_display_list)
+            
+            # Seleziona il primo trovato se quello attuale non è più in lista
+            if self.tcp_device_var.get() not in self.wifi_display_list:
+                self.tcp_device_var.set(self.wifi_display_list[0])
+            self.save_config()
+        else:
+            print("No devices found on port 9000")
 
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""
