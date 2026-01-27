@@ -4,6 +4,10 @@ import serial.tools.list_ports
 from jte_protocol import JTEProtocol
 import threading
 import time
+from collections import deque
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
 
 """
 CONCETTI BASE DI TKINTER / CUSTOMTKINTER:
@@ -20,16 +24,17 @@ CONCETTI BASE DI TKINTER / CUSTOMTKINTER:
 class VariableRow(ctk.CTkFrame):
     """
     Rappresenta una singola riga nell'interfaccia per una variabile.
-    Eredita da CTkFrame, quindi è un contenitore che al suo interno ha etichette e pulsanti.
     """
-    def __init__(self, master, var_data, on_modify, **kwargs):
+    def __init__(self, master, var_data, on_modify, on_plot_toggle, is_plotted=False, **kwargs):
         super().__init__(master, **kwargs)
         self.var_data = var_data
-        self.on_modify = on_modify # Funzione da chiamare quando si preme un pulsante
+        self.on_modify = on_modify
+        self.on_plot_toggle = on_plot_toggle
+        self.plot_cb_visible = False # Traccia se la checkbox è visualizzata
         
         # Etichetta Nome: anchor="w" allinea il testo a sinistra (West)
         # Font in grassetto se la variabile è di tipo '0' (presumibilmente un titolo o costante)
-        self.name_label = ctk.CTkLabel(self, text=var_data['name'], width=200, anchor="w", 
+        self.name_label = ctk.CTkLabel(self, text=var_data['name'], width=300, anchor="w", 
                                       font=ctk.CTkFont(weight="bold" if var_data['step_type'] == '0' else "normal"))
         self.name_label.pack(side="left", padx=10, pady=1)
         
@@ -52,11 +57,40 @@ class VariableRow(ctk.CTkFrame):
             self.dplus_btn = ctk.CTkButton(self, text="++", width=40, command=lambda: self.on_modify(var_data['index'], '*'))
             self.dplus_btn.pack(side="right", padx=2)
 
+        # Checkbox per il plotting (inizialmente nascosto o visibile in base al tipo/stato)
+        self.plot_cb = ctk.CTkCheckBox(self, text="Plot", width=40, 
+                                      command=lambda: self.on_plot_toggle(var_data['index'], self.plot_cb.get()))
+        
+        # Se la variabile era già monitorata o è di tipo modificabile (sicuramente ha un valore), la mostriamo
+        # Per le variabili di tipo '0', la checkbox è visibile solo se già monitorata.
+        # Per le variabili di tipo '1' o '2', è sempre visibile.
+        if is_plotted or var_data['step_type'] in ['1', '2']:
+            if is_plotted:
+                self.plot_cb.select()
+            self._show_plot_checkbox()
+
+    def _show_plot_checkbox(self):
+        """Rende visibile la checkbox del grafico se non lo è già."""
+        if not self.plot_cb_visible:
+            self.plot_cb.pack(side="right", padx=10)
+            self.plot_cb_visible = True
+
     def update_value(self, new_value):
         """Aggiorna il testo visualizzato nell'etichetta del valore."""
         try:
             if self.winfo_exists(): # Verifica che il widget non sia stato distrutto
                 self.value_label.configure(text=new_value)
+                
+                # Se la checkbox non è ancora visibile, proviamo a capire se è una variabile numerica
+                if not self.plot_cb_visible and new_value.strip() and new_value != "--":
+                    try:
+                        # Rimuove simboli non numerici per il test di conversione
+                        clean_val = "".join(c for c in new_value if c.isdigit() or c in '.-')
+                        if clean_val:
+                            float(clean_val)
+                            self._show_plot_checkbox()
+                    except:
+                        pass
         except:
             pass
 
@@ -68,10 +102,11 @@ class JTEApp(ctk.CTk):
         super().__init__()
 
         self.title("JTE Serial Debugger")
-        self.geometry("1200x800")
+        self.geometry("1400x900") # Leggermente più grande per il plot
         
-        # Configurazione della griglia: la colonna 1 (destra) si espanderà per occupare lo spazio
-        self.grid_rowconfigure(0, weight=1)
+        # Configurazione della griglia: la riga 1 ospita il plot
+        self.grid_rowconfigure(0, weight=3) # Variabili
+        self.grid_rowconfigure(1, weight=2) # Plot
         self.grid_columnconfigure(1, weight=1)
 
         # Frame di navigazione laterale (Sidebar)
@@ -113,11 +148,26 @@ class JTEApp(ctk.CTk):
         # Frame principale con scroll (per le variabili)
         self.home_frame = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
         self.home_frame.grid(row=0, column=1, sticky="nsew")
-        
-        self.protocol = None
+
+        self.jte_comm = None
         self.running = False
         self.var_rows = {} # Dizionario per mappare l'indice della variabile al suo widget VariableRow
         self.current_table_idx = -1
+        
+        # Dati per il plotting
+        self.plot_data = {} # idx -> deque dei valori
+        self.plot_max_reached = {} # idx -> valore massimo storico per normalizzazione
+        self.plotted_indices = set()
+        self.max_points = 200 # Lunghezza dell'asse X (punti visibili)
+
+        # Area Plot (Oscilloscopio)
+        self.plot_container = ctk.CTkFrame(self, corner_radius=0, fg_color="#1a1a1a")
+        self.plot_container.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        
+        self.init_plot()
+        
+        # Gestisce la chiusura pulita dell'applicazione
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def refresh_ports(self):
         """Rileva le porte seriali disponibili e aggiorna il menu."""
@@ -127,22 +177,23 @@ class JTEApp(ctk.CTk):
     def connect_serial(self, port):
         """Inizializza la comunicazione seriale sulla porta selezionata."""
         if port == "Nessuna Porta": return
-        if self.protocol:
+        if self.jte_comm:
             self.running = False
             time.sleep(0.2)
-            self.protocol.close()
+            self.jte_comm.close()
             
         try:
             self.version_label.configure(text="Connessione in corso...", text_color="orange")
-            self.protocol = JTEProtocol(port)
-            self.protocol.init_comm()
+            self.jte_comm = JTEProtocol(port)
+            self.jte_comm.init_comm()
             
             self.running = True
             # Avvia il thread di comunicazione separato per non bloccare la GUI
             threading.Thread(target=self.comm_thread, daemon=True).start()
             
             # Mostra subito le tabelle caricate durante init_comm
-            self.after(100, self.update_table_buttons)
+            if self.winfo_exists():
+                self.after(100, self.update_table_buttons)
             
         except Exception as e:
             self.version_label.configure(text=f"Errore: {str(e)}", text_color="red")
@@ -150,19 +201,20 @@ class JTEApp(ctk.CTk):
 
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""
-        if not self.protocol: return
+        if not self.jte_comm: return
         self.var_rows = {}
         # Distrugge tutti i widget figli del frame home per pulire lo schermo
         for child in self.home_frame.winfo_children():
             child.destroy()
         ctk.CTkLabel(self.home_frame, text="Caricamento variabili...").pack(pady=20)
         
-        self.protocol.select_table(idx)
+        self.jte_comm.select_table(idx)
         self.update_table_buttons() # Aggiorna i colori dei pulsanti
+        self.clear_plot_data() # ripulisce i dati nel plot
 
     def perform_reset(self):
         """Esegue il reset hardware e pulisce l'interfaccia."""
-        if not self.protocol: return
+        if not self.jte_comm: return
         self.version_label.configure(text="Reset in corso...", text_color="orange")
         # Svuota l'interfaccia
         for child in self.home_frame.winfo_children():
@@ -170,15 +222,103 @@ class JTEApp(ctk.CTk):
         self.var_rows = {}
         
         # Esegue reset tramite protocollo
-        self.protocol.hard_reset()
+        self.jte_comm.hard_reset()
         
         # Aggiorna la lista tabelle (che potrebbero essere cambiate o ricaricate)
         self.update_table_buttons()
+        self.clear_plot_data()
+
+    def init_plot(self):
+        """Inizializza la figura Matplotlib inserendola nel contenitore Tkinter."""
+        self.fig, self.ax = plt.subplots(figsize=(5, 2), dpi=100)
+        self.fig.patch.set_facecolor('#1a1a1a')
+        self.ax.set_facecolor('#0d0d0d')
+        self.ax.tick_params(colors='gray', labelsize=8)
+        self.ax.grid(color='#333333', linestyle='--', alpha=0.5)
+        self.ax.set_ylim(-0.1, 1.1) # Normalizzato 0-1 (con piccolo margine)
+        
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_container)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        
+        # Loop di aggiornamento grafico
+        self.update_plot_loop()
+
+    def toggle_plot_variable(self, idx, is_active):
+        """Attiva/Disattiva il monitoraggio di una variabile nel grafico."""
+        if is_active:
+            self.plotted_indices.add(idx)
+            if idx not in self.plot_data:
+                self.plot_data[idx] = deque([0.0] * self.max_points, maxlen=self.max_points)  
+                self.plot_max_reached[idx] = 1.0 # Default iniziale
+        else:
+            if idx in self.plotted_indices:
+                self.plotted_indices.remove(idx)
+
+    def clear_plot_data(self):
+        """Resetta i dati accumulati nel grafico e pulisce l'area visiva."""
+        self.plot_data = {}
+        self.plot_max_reached = {}
+        self.plotted_indices.clear()
+        
+        # Pulisce visivamente il grafico immediatamente
+        self.ax.clear()
+        self.ax.set_facecolor('#0d0d0d')
+        self.ax.grid(color='#333333', linestyle='--', alpha=0.5)
+        self.ax.set_ylim(-0.05, 1.05)
+        self.canvas.draw_idle()
+
+    def update_plot_loop(self):
+        """Aggiorna il grafico periodicamente."""
+        if not self.winfo_exists():
+            return
+
+        if self.running and self.plotted_indices:
+            self.ax.clear()
+            self.ax.set_facecolor('#0d0d0d')
+            self.ax.grid(color='#333333', linestyle='--', alpha=0.5)
+            self.ax.set_ylim(-0.05, 1.05)
+            
+            for idx in self.plotted_indices:
+                data = list(self.plot_data.get(idx, [0.0]))
+                m = self.plot_max_reached.get(idx, 1.0)
+                if m == 0: m = 1.0
+                norm_data = [v / m for v in data]
+                
+                var_name = "Var " + str(idx)
+                for v in self.jte_comm.variables:
+                    if v['index'] == idx:
+                        var_name = v['name']
+                        break
+                
+                self.ax.plot(norm_data, label=f"{var_name} (max:{m})")
+            
+            if self.plotted_indices:
+                self.ax.legend(loc="upper left", fontsize=8, facecolor='#1a1a1a', labelcolor='white')
+            
+            self.canvas.draw_idle()
+            
+        # Schedula il prossimo aggiornamento finché la finestra esiste
+        if self.winfo_exists():
+            self.after(50, self.update_plot_loop)
+
+    def on_closing(self):
+        """Gestisce la chiusura sicura dell'applicazione."""
+        self.running = False
+        if self.jte_comm:
+            self.jte_comm.close()
+        
+        # Ferma il mainloop e distrugge la finestra
+        self.quit()
+        try:
+            self.destroy()
+        except:
+            pass
 
     def modify_variable(self, idx, action):
         """Invia un comando di modifica variabile tramite il protocollo."""
-        if self.protocol:
-            self.protocol.modify_var(idx, action)
+        if self.jte_comm:
+            self.jte_comm.modify_var(idx, action)
 
     def comm_thread(self):
         """
@@ -191,14 +331,16 @@ class JTEApp(ctk.CTk):
         
         while self.running:
             try:
-                if self.protocol:
+                if self.jte_comm:
                     # Legge pacchetti in arrivo
-                    res = self.protocol.sync()
+                    res = self.jte_comm.sync()
+                    
+                    if not self.running: break
                     
                     # Usa self.after(0, ...) per chiedere alla GUI principale di eseguire aggiornamenti
                     # Questo perché Tkinter non è thread-safe: solo il thread principale può toccare i widget.
                     if res == "TABLES_LOADED":
-                        if self.protocol.tables:
+                        if self.jte_comm.tables:
                             print("Auto-selezione Tabella 0...")
                             self.after(0, lambda: self.select_table(0))
                     elif res == "TABLE_UPDATED":
@@ -214,15 +356,15 @@ class JTEApp(ctk.CTk):
                         self.after(0, self.update_table_buttons)
                     
                     now = time.time()
-                    time_since_last_tx = now - self.protocol.last_tx_time
+                    time_since_last_tx = now - self.jte_comm.last_tx_time
                     
                     # Logica di Keep-Alive e Polling
                     if time_since_last_tx > 2.8:
-                        self.protocol.wake_up()
+                        self.jte_comm.wake_up()
                         waiting_for_values = False
                         
                     # 2. Richiesta valori SEQUENZIALE (Chain-polling)
-                    elif (self.protocol.current_table_index != -1 and not self.protocol.is_loading):
+                    elif (self.jte_comm.current_table_index != -1 and not self.jte_comm.is_loading):
                         # Condizioni per nuovo invio:
                         # - Non stiamo già aspettando una risposta (waiting_for_values è False)
                         # - OPPURE è passato troppo tempo dall'ultima richiesta (timeout 1s per sicurezza)
@@ -231,13 +373,13 @@ class JTEApp(ctk.CTk):
                         ritardo_post_ricezione = (now - last_values_time > 0.05)
                         
                         if (not waiting_for_values or timeout_per_sicurezza) and ritardo_post_ricezione:
-                            self.protocol.request_values()
+                            self.jte_comm.request_values()
                             last_request_time = now
                             waiting_for_values = True
                         
                     # 3. KEEP ALIVE (se non siamo in una tabella)
-                    elif self.protocol.current_table_index == -1 and time_since_last_tx > 1.5:
-                        self.protocol.request_values()
+                    elif self.jte_comm.current_table_index == -1 and time_since_last_tx > 1.5:
+                        self.jte_comm.request_values()
                         
                 time.sleep(0.01) # Piccola pausa per non saturare la CPU
             except Exception as e:
@@ -246,12 +388,12 @@ class JTEApp(ctk.CTk):
 
     def update_table_buttons(self):
         """Crea dinamicamente i pulsanti per le tabelle nella barra laterale."""
-        if not self.protocol: return
+        if not self.jte_comm or not self.winfo_exists(): return
         for btn in self.table_buttons:
             btn.destroy()
         self.table_buttons = []
-        for table in self.protocol.tables:
-            is_active = (table['index'] == self.protocol.current_table_index)
+        for table in self.jte_comm.tables:
+            is_active = (table['index'] == self.jte_comm.current_table_index)
             # Creazione pulsante con colori diversi se attivo
             btn = ctk.CTkButton(self.table_btns_frame, text=table['name'], 
                                 fg_color="gray30" if is_active else "transparent",
@@ -261,19 +403,21 @@ class JTEApp(ctk.CTk):
             btn.pack(fill="x", padx=10, pady=2)
             self.table_buttons.append(btn)
         
-        if self.protocol.version:
-            self.version_label.configure(text=f"Ver: {self.protocol.version}", text_color="green")
+        if self.jte_comm.version:
+            self.version_label.configure(text=f"Ver: {self.jte_comm.version}", text_color="green")
 
     def rebuild_ui(self):
         """Costruisce integralmente la lista di widget per le variabili della tabella corrente."""
-        if not self.protocol: return                                # Se non c'è protocollo, non fare nulla
+        if not self.jte_comm or not self.winfo_exists(): return                                # Se non c'è protocollo, non fare nulla
         # Refresh UI
         for child in self.home_frame.winfo_children():              # Rimuove tutti i widget figli
             child.destroy()
         
         self.var_rows = {}                                          # Reset del dizionario delle righe
-        for var in self.protocol.variables:                         # Per ogni variabile nella tabella corrente
-            row = VariableRow(self.home_frame, var, self.modify_variable, fg_color="transparent") # Crea un widget VariableRow per ogni variabile ricevuta
+        for var in self.jte_comm.variables:                         # Per ogni variabile nella tabella corrente
+            is_plotted = var['index'] in self.plotted_indices
+            row = VariableRow(self.home_frame, var, self.modify_variable, self.toggle_plot_variable, 
+                             is_plotted=is_plotted, fg_color="transparent") # Crea un widget VariableRow per ogni variabile ricevuta
             row.pack(fill="x", padx=5, pady=0)                      # Aggiunge la riga al frame
             self.var_rows[var['index']] = row                       # Aggiunge la riga al dizionario
             
@@ -283,11 +427,31 @@ class JTEApp(ctk.CTk):
 
     def update_ui_values(self):
         """Aggiorna solo i valori numerici nell'interfaccia senza ricostruirla."""
-        if not self.protocol: return                                # Se non c'è protocollo, non fare nulla
-        for var in self.protocol.variables:                         # Per ogni variabile nella tabella corrente
-            row = self.var_rows.get(var['index'])                   # Ottiene la riga corrispondente all'indice della variabile
-            if row:                                                 # Se la riga esiste
-                row.update_value(var['value'])                      # Aggiorna il valore della riga
+        if not self.jte_comm or not self.winfo_exists(): return                                # Se non c'è protocollo, non fare nulla
+        for var in self.jte_comm.variables:                         # Per ogni variabile nella tabella corrente
+            idx = var['index']
+            val_str = var['value']
+            
+            # Aggiorna widget
+            row = self.var_rows.get(idx)
+            if row:
+                row.update_value(val_str)
+            
+            # Accumula dati per il plot se attivo
+            if idx in self.plotted_indices:
+                try:
+                    # Rimuove eventuali unità o simboli spuri per convertire in float
+                    clean_val = "".join(c for c in val_str if c.isdigit() or c in '.-')
+                    v = float(clean_val)
+                    if idx not in self.plot_data:
+                        self.plot_data[idx] = deque([0.0] * self.max_points, maxlen=self.max_points)
+                        self.plot_max_reached[idx] = abs(v) if abs(v) > 0 else 1.0
+                    
+                    self.plot_data[idx].append(v)
+                    # Aggiorna il massimo relativo (in valore assoluto per gestire negativi)
+                    self.plot_max_reached[idx] = max(self.plot_max_reached[idx], abs(v))
+                except (ValueError, TypeError):
+                    pass
 
 if __name__ == "__main__":
     # Avvio dell'applicazione
