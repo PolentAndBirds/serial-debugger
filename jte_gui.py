@@ -2,6 +2,7 @@
 import customtkinter as ctk # CustomTkinter è una libreria basata su Tkinter con un'estetica moderna
 import serial.tools.list_ports
 from jte_protocol import JTEProtocol
+from tcp_serial_bridge import TCPSerialBridge
 import threading
 import time
 from collections import deque
@@ -119,11 +120,11 @@ class JTEApp(ctk.CTk):
         self.navigation_frame_label.pack(pady=(20, 5))
         
         # Etichetta per mostrare la versione o lo stato della connessione
-        self.version_label = ctk.CTkLabel(self.navigation_frame, text="Disconnesso", font=ctk.CTkFont(size=10))
+        self.version_label = ctk.CTkLabel(self.navigation_frame, text="Not connected", font=ctk.CTkFont(size=10))
         self.version_label.pack(pady=(0, 20))
 
         # Variabile Tkinter per gestire la selezione del menu a tendina
-        self.port_var = ctk.StringVar(value="Seleziona Porta")
+        self.port_var = ctk.StringVar(value="Serial port")
         ports = [p.device for p in serial.tools.list_ports.comports()]
         
         # Menu a tendina per le porte seriali
@@ -132,14 +133,30 @@ class JTEApp(ctk.CTk):
                                           command=self.connect_serial)
         self.port_menu.pack(pady=10, padx=10)
 
-        self.btn_refresh_ports = ctk.CTkButton(self.navigation_frame, text="Aggiorna Porte", command=self.refresh_ports)
+        self.btn_refresh_ports = ctk.CTkButton(self.navigation_frame, text="Refresh", command=self.refresh_ports)
         self.btn_refresh_ports.pack(pady=5, padx=10)
 
         # Pulsante di Reset fisico (Hard Reset)
-        self.btn_reset = ctk.CTkButton(self.navigation_frame, text="Reset Board", 
+        self.btn_reset = ctk.CTkButton(self.navigation_frame, text="Reset", 
                                       fg_color="#A02020", hover_color="#801010",
                                       command=self.perform_reset)
         self.btn_reset.pack(pady=5, padx=10)
+
+        # Pulsante Disconnetti
+        self.btn_disconnect = ctk.CTkButton(self.navigation_frame, text="Close Connection", 
+                                           fg_color="#444444", hover_color="#333333",
+                                           command=self.disconnect)
+        self.btn_disconnect.pack(pady=5, padx=10)
+
+        # Sezione TCP per ESP32 WiFi
+        ctk.CTkLabel(self.navigation_frame, text="WiFi Bridge", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(20, 0))
+        self.tcp_ip_var = ctk.StringVar(value="192.168.1.15") # Valore di default indicativo
+        self.tcp_entry = ctk.CTkEntry(self.navigation_frame, textvariable=self.tcp_ip_var, placeholder_text="IP ESP32")
+        self.tcp_entry.pack(pady=5, padx=10)
+        
+        self.btn_connect_tcp = ctk.CTkButton(self.navigation_frame, text="Connect WiFi Bridge", 
+                                            command=lambda: self.connect_serial(self.tcp_ip_var.get(), is_tcp=True))
+        self.btn_connect_tcp.pack(pady=5, padx=10)
 
         self.table_buttons = [] # Lista per tenere traccia dei pulsanti delle tabelle creati dinamicamente
         self.table_btns_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
@@ -174,17 +191,23 @@ class JTEApp(ctk.CTk):
         ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_menu.configure(values=ports if ports else ["Nessuna Porta"])
 
-    def connect_serial(self, port):
-        """Inizializza la comunicazione seriale sulla porta selezionata."""
-        if port == "Nessuna Porta": return
-        if self.jte_comm:
-            self.running = False
-            time.sleep(0.2)
-            self.jte_comm.close()
-            
+    def connect_serial(self, port, is_tcp=False):
+        """Inizializza la comunicazione (seriale o TCP) sulla porta selezionata."""
+        if port == "Nessuna Porta" or not port: return
+        self.disconnect()
+        
         try:
-            self.version_label.configure(text="Connessione in corso...", text_color="orange")
-            self.jte_comm = JTEProtocol(port)
+            self.version_label.configure(text=f"Connessione {'TCP' if is_tcp else 'Seriale'}...", text_color="orange")
+            
+            if is_tcp:
+                # Crea il bridge TCP
+                bridge = TCPSerialBridge(port, port=9000)
+                if not bridge.open():
+                    raise Exception(f"Impossibile connettersi a {port}:9000")
+                self.jte_comm = JTEProtocol(bridge)
+            else:
+                self.jte_comm = JTEProtocol(port)
+                
             self.jte_comm.init_comm()
             
             self.running = True
@@ -198,6 +221,24 @@ class JTEApp(ctk.CTk):
         except Exception as e:
             self.version_label.configure(text=f"Errore: {str(e)}", text_color="red")
             print(f"Error connecting: {e}")
+
+    def disconnect(self):
+        """Chiude la comunicazione attuale e pulisce l'interfaccia."""
+        self.running = False
+        if self.jte_comm:
+            self.jte_comm.close()
+            self.jte_comm = None
+        
+        # Pulisce l'interfaccia
+        self.version_label.configure(text="Disconnesso", text_color="gray")
+        self.current_table_idx = -1
+        self.table_buttons = []
+        for child in self.table_btns_frame.winfo_children():
+            child.destroy()
+        for child in self.home_frame.winfo_children():
+            child.destroy()
+        self.var_rows = {}
+        self.clear_plot_data()
 
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""

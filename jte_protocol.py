@@ -9,22 +9,25 @@ class JTEProtocol:
     Implementa un protocollo personalizzato basato su pacchetti binari per la gestione
     di tabelle di parametri e variabili in tempo reale.
     """
-    def __init__(self, port, baudrate=19200, timeout=1):
+    def __init__(self, port_or_obj, baudrate=19200, timeout=1):
         """
-        Inizializza la connessione seriale.
+        Inizializza la connessione.
         Parametri:
-            port: Nome della porta seriale (es. 'COM3' o '/dev/ttyUSB0')
+            port_or_obj: Nome della porta seriale (es. 'COM3') o oggetto che implementa read/write.
             baudrate: Velocità di trasmissione (default 19200)
             timeout: Tempo limite per le operazioni di lettura
         """
-        self.ser = serial.Serial()
-        self.ser.port = port
-        self.ser.baudrate = baudrate
-        self.ser.timeout = timeout
-        # Segnali di controllo necessari per la board STM32
-        self.ser.dtr = False
-        self.ser.rts = True
-        self.ser.open()
+        if hasattr(port_or_obj, 'read') and hasattr(port_or_obj, 'write'):
+            self.ser = port_or_obj
+        else:
+            self.ser = serial.Serial()
+            self.ser.port = port_or_obj
+            self.ser.baudrate = baudrate
+            self.ser.timeout = timeout
+            # Segnali di controllo necessari per la board STM32
+            self.ser.dtr = False
+            self.ser.rts = True
+            self.ser.open()
         
         # Lock per garantire l'accesso thread-safe alla porta seriale
         self.lock = threading.Lock()
