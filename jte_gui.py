@@ -167,15 +167,19 @@ class JTEApp(ctk.CTk):
                                          values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
                                          command=self.on_connect_wifi_click)
         self.tcp_menu.pack(pady=5, padx=10)
-        
         self.btn_scan_tcp = ctk.CTkButton(self.navigation_frame, text="Scan Network", 
                                          fg_color="#1f538d", hover_color="#14375e",
                                          command=self.start_scan)
         self.btn_scan_tcp.pack(pady=5, padx=10)
 
+        self.btn_setup_wifi = ctk.CTkButton(self.navigation_frame, text="Setup New WiFi", 
+                                           fg_color="#285e28", hover_color="#1e461e",
+                                           command=self.open_wifi_setup)
+        self.btn_setup_wifi.pack(pady=5, padx=10)
+
         self.table_buttons = [] # Lista per tenere traccia dei pulsanti delle tabelle creati dinamicamente
-        self.table_btns_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
-        self.table_btns_frame.pack(fill="both", expand=True)
+        self.table_btns_frame = ctk.CTkScrollableFrame(self.navigation_frame, fg_color="transparent", label_text="Tables")
+        self.table_btns_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Frame principale con scroll (per le variabili)
         self.home_frame = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
@@ -345,6 +349,83 @@ class JTEApp(ctk.CTk):
         else:
             print("No devices found on port 9000")
 
+    def open_wifi_setup(self):
+        """Apre una finestra popup per configurare un nuovo ESP32 in modalità AP (10.255.255.1)."""
+        setup_win = ctk.CTkToplevel(self)
+        setup_win.title("ESP32 WiFi Configuration")
+        setup_win.geometry("400x480")
+        setup_win.attributes("-topmost", True)
+        
+        ctk.CTkLabel(setup_win, text="Configure ESP32 Bridge", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(setup_win, text="Connect to ESP32 AP first (IP: 10.255.255.1)", font=ctk.CTkFont(size=11), text_color="orange").pack(pady=(0, 10))
+
+        # Campi di input
+        ctk.CTkLabel(setup_win, text="Device Name:").pack(pady=(10, 0))
+        name_entry = ctk.CTkEntry(setup_win, width=300)
+        name_entry.pack(pady=5)
+
+        ctk.CTkLabel(setup_win, text="WiFi SSID:").pack(pady=(10, 0))
+        ssid_entry = ctk.CTkEntry(setup_win, width=300)
+        ssid_entry.insert(0, "jte_production")
+        ssid_entry.pack(pady=5)
+
+        ctk.CTkLabel(setup_win, text="WiFi Password:").pack(pady=(10, 0))
+        psk_entry = ctk.CTkEntry(setup_win, width=300)
+        psk_entry.insert(0, "Jasic@123")
+        psk_entry.pack(pady=5)
+
+        status_label = ctk.CTkLabel(setup_win, text="", text_color="gray")
+        status_label.pack(pady=10)
+
+        def send_config():
+            name = name_entry.get().strip()
+            ssid = ssid_entry.get().strip()
+            psk = psk_entry.get().strip()
+            
+            if not name or not ssid or not psk:
+                status_label.configure(text="Please fill all fields!", text_color="red")
+                return
+
+            def config_thread():
+                try:
+                    self.after(0, lambda: status_label.configure(text="Connecting to 10.255.255.1...", text_color="orange"))
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5.0)
+                    sock.connect(("10.255.255.1", 9000))
+                    
+                    # Funzione helper per inviare e ricevere conferma
+                    def send_at(cmd, desc):
+                        self.after(0, lambda: status_label.configure(text=f"Setting {desc}..."))
+                        sock.sendall(f"{cmd}\r\n".encode('ascii'))
+                        resp = sock.recv(1024).decode('ascii', errors='ignore')
+                        return "OK" in resp
+
+                    if not send_at(f"AT+NAME={name}\r\n", "Name"):
+                        raise Exception("Failed to set Name")
+                    time.sleep(0.5)
+                    
+                    if not send_at(f"AT+SSID={ssid}\r\n", "SSID"):
+                        raise Exception("Failed to set SSID")
+                    time.sleep(0.5)
+                    
+                    if not send_at(f"AT+PSK={psk}\r\n", "PSK"):
+                        raise Exception("Failed to set PSK")
+                    
+                    self.after(0, lambda: status_label.configure(text="Config Saved! ESP32 Rebooting...", text_color="green"))
+                    sock.close()
+                    # Aggiungi l'IP di default alla lista dopo il setup (presumendo che si sposterà su WiFi locale)
+                    # Note: L'IP finale dipenderà dal DHCP, ma salviamo il nome per comodità
+                    self.after(2000, setup_win.destroy)
+                except Exception as e:
+                    self.after(0, lambda: status_label.configure(text=f"Error: {str(e)}", text_color="red"))
+
+            threading.Thread(target=config_thread, daemon=True).start()
+
+        self.btn_save_wifi = ctk.CTkButton(setup_win, text="Save & Reboot ESP32", 
+                                          fg_color="#285e28", hover_color="#1e461e",
+                                          command=send_config)
+        self.btn_save_wifi.pack(pady=20)
+
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""
         if not self.jte_comm: return
@@ -483,12 +564,13 @@ class JTEApp(ctk.CTk):
                     
                     if not self.running: break
                     
-                    # Usa self.after(0, ...) per chiedere alla GUI principale di eseguire aggiornamenti
-                    # Questo perché Tkinter non è thread-safe: solo il thread principale può toccare i widget.
+                    # Se abbiamo finito di caricare le tabelle, resettiamo is_loading
+                    # (gestito internamente da sync() per le variabili, ma qui per TABLES_LOADED)
                     if res == "TABLES_LOADED":
                         if self.jte_comm.tables:
                             print("Auto-selezione Tabella 0...")
                             self.after(0, lambda: self.select_table(0))
+                        self.jte_comm.is_loading = False # FINE sincronizzazione iniziale
                     elif res == "TABLE_UPDATED":
                         self.after(0, self.rebuild_ui)
                         waiting_for_values = False # Reset stato dopo cambio tabella
@@ -523,8 +605,10 @@ class JTEApp(ctk.CTk):
                             last_request_time = now
                             waiting_for_values = True
                         
-                    # 3. KEEP ALIVE (se non siamo in una tabella)
-                    elif self.jte_comm.current_table_index == -1 and time_since_last_tx > 1.5:
+                    # 3. KEEP ALIVE (solo se già sincronizzati ma inattivi)
+                    elif (not self.jte_comm.is_loading and 
+                          self.jte_comm.current_table_index != -1 and 
+                          time_since_last_tx > 3.0):
                         self.jte_comm.request_values()
                         
                 time.sleep(0.01) # Piccola pausa per non saturare la CPU

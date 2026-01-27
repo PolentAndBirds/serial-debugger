@@ -43,6 +43,13 @@ class JTEProtocol:
 
     def close(self):
         """Chiude la connessione seriale in modo sicuro."""
+        try:
+            # Invia comando di chiusura sessione se possibile
+            self.send_raw("##")
+            time.sleep(0.1)
+        except:
+            pass
+            
         with self.lock:
             if self.ser.is_open:
                 self.ser.close()
@@ -214,39 +221,59 @@ class JTEProtocol:
     def wake_up(self):
         """
         Invia una sequenza di risveglio se la board non risponde da tempo.
-        Riautorizza la comunicazione e risincronizza lo stato.
         """
         print("--- WAKE UP STM32 ---")
-        self.send_raw("#$") # Sblocco
+        self.send_raw("#$")
         time.sleep(0.1)
-        self.send_raw("#:") # Richiesta Info/Versione
+        self.send_raw("#:#$")
         time.sleep(0.1)
         if self.current_table_index != -1:
-            # Se eravamo in una tabella, la riselezioniamo
             self.send_raw(f"#T{self.current_table_index}#.")
 
     def init_comm(self):
         """
-        Esegue l'inizializzazione completa della comunicazione.
-        Svuota i buffer e invia la sequenza di 'handshake' #$#:.
+        Esegue l'inizializzazione completa della comunicazione seguendo la sequenza:
+        AT\r -> #$ -> #:#$
         """
         with self.lock:
             self.ser.reset_input_buffer()
         
-        print("Invio sequenza sblocco e inizializzazione #$#:")
-        self.send_raw("#$#:") # #$ sblocca, #: richiede nomi tabelle e versione
+        print("Inizio sequenza di inizializzazione compatibile...")
+        self.is_loading = True
         self.tables = []
         self._temp_variables = []
         self.current_table_index = -1
+        
+        # 1. Clean buffer
+        self.send_raw("AT\r")
+        time.sleep(0.2)
+        
+        # 2. Primo sblocco
+        self.send_raw("#$")
+        time.sleep(0.2)
+        
+        # 3. Richiesta info e secondo sblocco
+        self.send_raw("#:#$")
 
     def hard_reset(self):
         """
-        Esegue un reset hardware della board agendo sul segnale DTR (connesso al pin RESET).
-        Dopo il reset attende il riavvio della board e reinizializza la comunicazione.
+        Esegue un reset hardware della board.
+        Invia AT+RST per i bridge WiFi e agisce sul segnale DTR per la seriale fisica.
         """
-        print("--- ESECUZIONE HARD RESET (DTR TOGGLE) ---")
-        self.ser.dtr = True
-        time.sleep(0.2)
-        self.ser.dtr = False
+        print("--- ESECUZIONE HARD RESET ---")
+        # Tenta l'invio del comando AT per i bridge WiFi (ESP32)
+        try:
+            self.send_raw("AT+STM32-RST-SEQUENCE=1\r\n")
+        except:
+            pass
+            
+        # Toggle DTR per connessioni seriali fisiche
+        try:
+            self.ser.dtr = True
+            time.sleep(0.2)
+            self.ser.dtr = False
+        except:
+            pass
+            
         time.sleep(1.5) # Attesa per il bootloader/startup firmware
         self.init_comm() # Rimette l'STM32 in stato di ascolto attivo
