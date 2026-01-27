@@ -12,6 +12,7 @@ import numpy as np
 import json
 import os
 import socket
+from tkinter import filedialog, messagebox
 
 """
 CONCETTI BASE DI TKINTER / CUSTOMTKINTER:
@@ -117,39 +118,40 @@ class JTEApp(ctk.CTk):
         self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
         self.navigation_frame.grid(row=0, column=0, sticky="nsew") # sticky="nsew" fa sì che occupi tutta l'altezza
         self.navigation_frame.grid_rowconfigure(4, weight=1)
-
-        self.navigation_frame_label = ctk.CTkLabel(self.navigation_frame, text="  JTE Interface", 
-                                                  compound="left", font=ctk.CTkFont(size=15, weight="bold"))
-        self.navigation_frame_label.pack(pady=(20, 5))
         
         # Etichetta per mostrare la versione o lo stato della connessione
-        self.version_label = ctk.CTkLabel(self.navigation_frame, text="Not connected", font=ctk.CTkFont(size=10))
-        self.version_label.pack(pady=(0, 20))
+        self.version_label = ctk.CTkLabel(self.navigation_frame, text="Not connected", font=ctk.CTkFont(size=12))
+        self.version_label.pack(pady=(0, 10))
 
         # Variabile Tkinter per gestire la selezione del menu a tendina
         self.port_var = ctk.StringVar(value="Serial port")
         ports = [p.device for p in serial.tools.list_ports.comports()]
         
-        # Menu a tendina per le porte seriali
-        self.port_menu = ctk.CTkOptionMenu(self.navigation_frame, variable=self.port_var, 
+        # Riga Seriale: Dropdown + Refresh
+        serial_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        serial_frame.pack(pady=5, padx=10, fill="x")
+        
+        self.port_menu = ctk.CTkOptionMenu(serial_frame, variable=self.port_var, 
                                           values=ports if ports else ["Nessuna Porta"],
-                                          command=self.connect_serial)
-        self.port_menu.pack(pady=10, padx=10)
+                                          command=self.connect_serial, width=140)
+        self.port_menu.pack(side="left", padx=(0, 5))
+        self.port_menu.bind("<Button-1>", lambda e: self.refresh_ports()) # Auto-refresh al click
 
-        self.btn_refresh_ports = ctk.CTkButton(self.navigation_frame, text="Refresh", command=self.refresh_ports)
-        self.btn_refresh_ports.pack(pady=5, padx=10)
+        self.btn_refresh_ports = ctk.CTkButton(serial_frame, text="🔄", width=30, 
+                                              command=self.refresh_ports)
+        self.btn_refresh_ports.pack(side="left")
 
-        # Pulsante di Reset fisico (Hard Reset)
-        self.btn_reset = ctk.CTkButton(self.navigation_frame, text="Reset", 
-                                      fg_color="#A02020", hover_color="#801010",
-                                      command=self.perform_reset)
-        self.btn_reset.pack(pady=5, padx=10)
+        # Riga Azioni: Reset + Close
+        actions_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        actions_frame.pack(pady=5, padx=10, fill="x")
+        
+        self.btn_reset = ctk.CTkButton(actions_frame, text="⚡ Reset", fg_color="#A02020", 
+                                      hover_color="#801010", command=self.perform_reset, width=85)
+        self.btn_reset.pack(side="left", padx=(0, 5))
 
-        # Pulsante Disconnetti
-        self.btn_disconnect = ctk.CTkButton(self.navigation_frame, text="Close Connection", 
-                                           fg_color="#444444", hover_color="#333333",
-                                           command=self.disconnect)
-        self.btn_disconnect.pack(pady=5, padx=10)
+        self.btn_disconnect = ctk.CTkButton(actions_frame, text="🚫 Close", fg_color="#444444", 
+                                           hover_color="#333333", command=self.disconnect, width=85)
+        self.btn_disconnect.pack(side="left")
 
         # Carica IP salvati
         self.config_file = "config.json"
@@ -158,24 +160,62 @@ class JTEApp(ctk.CTk):
         
         # Sezione WiFi aggiornata con Dropdown e Scan
         ctk.CTkLabel(self.navigation_frame, text="WiFi Bridge", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(20, 0))
-        
         # Prepariamo la lista per il dropdown: "Nome (IP)"
         self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
-        
         self.tcp_device_var = ctk.StringVar(value=self.wifi_display_list[0] if self.wifi_display_list else "")
-        self.tcp_menu = ctk.CTkOptionMenu(self.navigation_frame, variable=self.tcp_device_var, 
+        
+        # Riga WiFi: Dropdown + Scan
+        wifi_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        wifi_frame.pack(pady=5, padx=10, fill="x")
+        
+        self.tcp_menu = ctk.CTkOptionMenu(wifi_frame, variable=self.tcp_device_var, 
                                          values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
-                                         command=self.on_connect_wifi_click)
-        self.tcp_menu.pack(pady=5, padx=10)
-        self.btn_scan_tcp = ctk.CTkButton(self.navigation_frame, text="Scan Network", 
+                                         command=self.on_connect_wifi_click, width=140)
+        self.tcp_menu.pack(side="left", padx=(0, 5))
+        self.tcp_menu.bind("<Button-1>", lambda e: self.start_scan()) # Auto-scan al click
+
+        self.btn_scan_tcp = ctk.CTkButton(wifi_frame, text="🔍", width=30, 
                                          fg_color="#1f538d", hover_color="#14375e",
                                          command=self.start_scan)
-        self.btn_scan_tcp.pack(pady=5, padx=10)
+        self.btn_scan_tcp.pack(side="left")
 
-        self.btn_setup_wifi = ctk.CTkButton(self.navigation_frame, text="Setup New WiFi", 
+        self.btn_setup_wifi = ctk.CTkButton(self.navigation_frame, text="⚙️ Setup New Bridge", 
                                            fg_color="#285e28", hover_color="#1e461e",
                                            command=self.open_wifi_setup)
-        self.btn_setup_wifi.pack(pady=5, padx=10)
+        self.btn_setup_wifi.pack(pady=5, padx=10, fill="x")
+
+        # Sezione Firmware Update
+        ctk.CTkLabel(self.navigation_frame, text="Firmware", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        self.hex_path_var = ctk.StringVar(value="")
+        self.btn_select_hex = ctk.CTkButton(self.navigation_frame, text="📁 Select HEX", 
+                                           fg_color="gray30", command=self.select_hex_file)
+        self.btn_select_hex.pack(pady=5, padx=10, fill="x")
+        
+        self.stm32_model_var = ctk.StringVar(value="F303")
+        # Riga Flash: Model + Flash + Format
+        flash_row = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        flash_row.pack(pady=5, padx=10, fill="x")
+        
+        self.stm32_model_menu = ctk.CTkOptionMenu(flash_row, variable=self.stm32_model_var,
+                                                 values=["F303", "G474"], width=65)
+        self.stm32_model_menu.pack(side="left", padx=(0, 5))
+        
+        self.btn_flash = ctk.CTkButton(flash_row, text="🚀 Flash", width=55,
+                                      fg_color="#A0522D", hover_color="#8B4513",
+                                      command=self.start_file_transfer)
+        self.btn_flash.pack(side="left", padx=(0, 5))
+
+        self.btn_format = ctk.CTkButton(flash_row, text="🧹 Format", width=55,
+                                       fg_color="#555555", hover_color="#333333",
+                                       command=self.start_format_spiffs)
+        self.btn_format.pack(side="left")
+        
+        # Barra di progresso per il caricamento
+        self.progress_bar = ctk.CTkProgressBar(self.navigation_frame)
+        self.progress_bar.set(0)
+        self.progress_bar.pack(pady=5, padx=10, fill="x")
+        self.progress_label = ctk.CTkLabel(self.navigation_frame, text="Ready", font=ctk.CTkFont(size=10))
+        self.progress_label.pack(pady=(0, 10))
 
         self.table_buttons = [] # Lista per tenere traccia dei pulsanti delle tabelle creati dinamicamente
         self.table_btns_frame = ctk.CTkScrollableFrame(self.navigation_frame, fg_color="transparent", label_text="Tables")
@@ -187,6 +227,8 @@ class JTEApp(ctk.CTk):
 
         self.jte_comm = None
         self.running = False
+        self.is_suspended = False
+        self.connected_ip = None
         self.var_rows = {} # Dizionario per mappare l'indice della variabile al suo widget VariableRow
         self.current_table_idx = -1
         
@@ -205,6 +247,9 @@ class JTEApp(ctk.CTk):
         # Gestisce la chiusura pulita dell'applicazione
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # Stato iniziale pulsanti
+        self.update_action_buttons_state()
+
     def refresh_ports(self):
         """Rileva le porte seriali disponibili e aggiorna il menu."""
         ports = [p.device for p in serial.tools.list_ports.comports()]
@@ -214,6 +259,7 @@ class JTEApp(ctk.CTk):
         # Estrae l'IP dalla stringa "Nome (IP)"
         if "(" in selection and ")" in selection:
             ip = selection.split("(")[1].split(")")[0]
+            self.connected_ip = ip
             self.connect_serial(ip, is_tcp=True)
 
     def connect_serial(self, port, is_tcp=False):
@@ -235,17 +281,18 @@ class JTEApp(ctk.CTk):
                 
             self.jte_comm.init_comm()
             
+            self.update_table_buttons()
+            
             self.running = True
             # Avvia il thread di comunicazione separato per non bloccare la GUI
             threading.Thread(target=self.comm_thread, daemon=True).start()
-            
-            # Mostra subito le tabelle caricate durante init_comm
-            if self.winfo_exists():
-                self.after(100, self.update_table_buttons)
+            self.update_action_buttons_state()
             
         except Exception as e:
             self.version_label.configure(text=f"Errore: {str(e)}", text_color="red")
             print(f"Error connecting: {e}")
+            self.running = False
+            self.update_action_buttons_state()
 
     def disconnect(self):
         """Chiude la comunicazione attuale e pulisce l'interfaccia."""
@@ -264,6 +311,27 @@ class JTEApp(ctk.CTk):
             child.destroy()
         self.var_rows = {}
         self.clear_plot_data()
+        self.update_action_buttons_state()
+
+    def update_action_buttons_state(self):
+        """Abilita o disabilita i pulsanti in base allo stato della connessione."""
+        state = "normal" if self.running else "disabled"
+        self.btn_disconnect.configure(state=state)
+        self.btn_flash.configure(state=state)
+        self.btn_format.configure(state=state)
+        self.btn_reset.configure(state=state)
+
+    def pause_bridge(self):
+        """Sospende temporaneamente la comunicazione senza pulire la UI."""
+        self.is_suspended = True
+        if self.jte_comm:
+            self.jte_comm.close() # Chiude socket/seriale
+
+    def resume_bridge(self):
+        """Riprende la comunicazione precedentemente sospesa."""
+        if self.connected_ip:
+            self.connect_serial(self.connected_ip, is_tcp=True)
+        self.is_suspended = False
 
     def load_config(self):
         if os.path.exists(self.config_file):
@@ -281,7 +349,7 @@ class JTEApp(ctk.CTk):
         except: pass
 
     def start_scan(self):
-        self.btn_scan_tcp.configure(text="Scanning...", state="disabled")
+        self.btn_scan_tcp.configure(text="...", state="disabled")
         threading.Thread(target=self.scan_network_thread, daemon=True).start()
 
     def scan_network_thread(self):
@@ -333,21 +401,43 @@ class JTEApp(ctk.CTk):
         self.after(0, lambda: self.finish_scan(found_devices))
 
     def finish_scan(self, found_devices):
-        self.btn_scan_tcp.configure(text="Scan Network", state="normal")
-        if found_devices:
-            # Aggiorna il dizionario locale
-            self.wifi_devices.update(found_devices)
-            
-            # Rigenera la lista display
-            self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
+        self.btn_scan_tcp.configure(text="🔍", state="normal")
+        
+        # Aggiorniamo wifi_devices in modo non distruttivo (manteniamo quello connesso)
+        new_devices = found_devices.copy()
+        for ip, name in self.wifi_devices.items():
+            if ip not in new_devices:
+                # Se è quello a cui siamo connessi, lo teniamo forzatamente
+                if ip == self.connected_ip:
+                    new_devices[ip] = name
+        
+        self.wifi_devices = new_devices
+        self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
+        
+        if not self.wifi_display_list:
+            self.tcp_menu.configure(values=["No devices found"])
+            self.tcp_device_var.set("No devices found")
+        else:
             self.tcp_menu.configure(values=self.wifi_display_list)
             
-            # Seleziona il primo trovato se quello attuale non è più in lista
-            if self.tcp_device_var.get() not in self.wifi_display_list:
-                self.tcp_device_var.set(self.wifi_display_list[0])
-            self.save_config()
-        else:
-            print("No devices found on port 9000")
+            # Manteniamo la selezione sull'IP connesso se possibile
+            target_ip = self.connected_ip if self.connected_ip else None
+            
+            new_selection = None
+            for item in self.wifi_display_list:
+                if target_ip and f"({target_ip})" in item:
+                    new_selection = item
+                    break
+            
+            if new_selection:
+                self.tcp_device_var.set(new_selection)
+            elif self.wifi_display_list:
+                # Altrimenti lasciamo quello che c'era se è ancora valido, o il primo
+                curr = self.tcp_device_var.get()
+                if curr not in self.wifi_display_list:
+                    self.tcp_device_var.set(self.wifi_display_list[0])
+        
+        self.save_config()
 
     def open_wifi_setup(self):
         """Apre una finestra popup per configurare un nuovo ESP32 in modalità AP (10.255.255.1)."""
@@ -425,6 +515,163 @@ class JTEApp(ctk.CTk):
                                           fg_color="#285e28", hover_color="#1e461e",
                                           command=send_config)
         self.btn_save_wifi.pack(pady=20)
+
+    def select_hex_file(self):
+        """Apre il selettore file per scegliere un file .hex."""
+        path = filedialog.askopenfilename(filetypes=[("HEX files", "*.hex"), ("All files", "*.*")])
+        if path:
+            self.hex_path_var.set(path)
+            self.btn_select_hex.configure(text=os.path.basename(path))
+
+    def start_file_transfer(self):
+        """Avvia il trasferimento del file HEX in un thread separato."""
+        file_path = self.hex_path_var.get()
+        if not file_path:
+            self.progress_label.configure(text="Select a file first!", text_color="red")
+            return
+        
+        selection = self.tcp_device_var.get()
+        if "(" not in selection:
+            self.progress_label.configure(text="Select a WiFi device!", text_color="red")
+            return
+        
+        ip = selection.split("(")[1].split(")")[0]
+        
+        # Disconnetti la comunicazione attuale ma senza pulire UI
+        self.pause_bridge()
+        
+        self.btn_flash.configure(state="disabled")
+        threading.Thread(target=self.file_transfer_thread, args=(ip, file_path), daemon=True).start()
+
+    def file_transfer_thread(self, ip, file_path):
+        """Logica di trasferimento file (basata sullo script fornito)."""
+        port = 9000
+        try:
+            file_size = os.path.getsize(file_path)
+            filename = os.path.basename(file_path)
+            
+            self.after(0, lambda: self.progress_label.configure(text="Connecting...", text_color="orange"))
+            
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(20)
+                s.connect((ip, port))
+                
+                # Inizio comando flash
+                s.sendall(f"AT+FSTART={file_size},{filename}\r".encode())
+                
+                response = s.recv(1024).decode(errors='ignore')
+                if "OK" in response:
+                    self.after(0, lambda: self.progress_label.configure(text="Uploading...", text_color="cyan"))
+                    bytes_sent = 0
+                    
+                    with open(file_path, "rb") as f:
+                        while True:
+                            chunk = f.read(4096)
+                            if not chunk:
+                                break
+                            s.sendall(chunk)
+                            bytes_sent += len(chunk)
+                            
+                            progress = bytes_sent / file_size
+                            self.after(0, lambda p=progress: self.progress_bar.set(p))
+                            self.after(0, lambda p=progress: self.progress_label.configure(text=f"Uploading: {p*100:.1f}%"))
+                            
+                            # Piccola pausa per dare respiro a SPIFFS (come da script originale)
+                            time.sleep(0.005) 
+                    
+                    self.after(0, lambda: self.progress_label.configure(text="Finalizing Upload...", text_color="orange"))
+                    final_response = s.recv(1024).decode(errors='ignore')
+                    
+                    if "OK" in final_response:
+                        # 4. Comando di FLASH effettivo
+                        model = self.stm32_model_var.get()
+                        self.after(0, lambda: self.progress_label.configure(text=f"Flashing {model}...", text_color="yellow"))
+                        s.sendall(f"AT+STMFLASH={model},{filename}\r".encode())
+                        
+                        # Il flash può richiedere tempo, leggiamo i progressi in un loop
+                        s.settimeout(120) 
+                        buffer = ""
+                        while True:
+                            try:
+                                chunk = s.recv(1024).decode(errors='ignore')
+                                if not chunk: break
+                                buffer += chunk
+                                
+                                # Processa riga per riga la risposta dell'ESP32
+                                while "\n" in buffer:
+                                    line, buffer = buffer.split("\n", 1)
+                                    line = line.strip()
+                                    if not line: continue
+                                    
+                                    if "+PROGRESS:" in line:
+                                        try:
+                                            perc = int(line.split(":")[1].replace("%", "").strip())
+                                            self.after(0, lambda p=perc: self.progress_bar.set(p/100))
+                                            self.after(0, lambda p=perc: self.progress_label.configure(text=f"Flashing: {p}%", text_color="yellow"))
+                                        except: pass
+                                    
+                                    elif "+ERROR: WRONG CHIP" in line:
+                                        self.after(0, lambda l=line: self.progress_label.configure(text=f"Error: {l}", text_color="red"))
+                                        return
+                                    
+                                    elif "+SUCCESS:" in line:
+                                        info = line.split(":", 1)[1].strip()
+                                        self.after(0, lambda i=info: self.progress_label.configure(text=f"Success: {i}", text_color="green"))
+                                        self.after(0, lambda: self.progress_bar.set(1.0))
+                                        return # Finito con successo
+                                        
+                                    elif "OK" in line and "+SUCCESS" not in line:
+                                        # Fine generica della sessione AT
+                                        pass
+                                        
+                            except socket.timeout:
+                                self.after(0, lambda: self.progress_label.configure(text="Flash Timeout!", text_color="red"))
+                                break
+                    else:
+                        self.after(0, lambda: self.progress_label.configure(text=f"Upload Error: {final_response.strip()}", text_color="red"))
+                else:
+                    self.after(0, lambda: self.progress_label.configure(text=f"Error: {response.strip()}", text_color="red"))
+        except Exception as e:
+            self.after(0, lambda: self.progress_label.configure(text=f"Error: {str(e)}", text_color="red"))
+        finally:
+            self.after(0, lambda: self.btn_flash.configure(state="normal"))
+            self.after(2000, self.resume_bridge) # Ripristina bridge dopo flash
+
+    def start_format_spiffs(self):
+        """Avvia la formattazione SPIFFS in un thread separato."""
+        selection = self.tcp_device_var.get()
+        if "(" not in selection:
+            self.progress_label.configure(text="Select a WiFi device!", text_color="red")
+            return
+        
+        ip = selection.split("(")[1].split(")")[0]
+        
+        if not messagebox.askyesno("Confirm", "This will ERASE all files on ESP32. Continue?"):
+            return
+
+        self.pause_bridge() # Sospende senza pulire UI
+        self.btn_format.configure(state="disabled")
+        threading.Thread(target=self.format_spiffs_thread, args=(ip,), daemon=True).start()
+
+    def format_spiffs_thread(self, ip):
+        """Logica di formattazione SPIFFS. Usa un socket pulito."""
+        try:
+            self.after(0, lambda: self.progress_label.configure(text="Formatting SPIFFS (Wait...)", text_color="orange"))
+            
+            # Usiamo sempre un socket pulito per i comandi AT (fuori dal bypass)
+            port = 9000
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(60)
+                s.connect((ip, port))
+                s.sendall(b"AT+FFMT\r")
+                response = s.recv(1024).decode(errors='ignore')
+                
+            self.after(0, lambda: self.progress_label.configure(text=f"Result: {response.strip()}", text_color="green" if "OK" in response else "red"))
+        except Exception as e:
+            self.after(0, lambda: self.progress_label.configure(text=f"Error: {str(e)}", text_color="red"))
+        finally:
+            self.after(0, lambda: self.btn_format.configure(state="normal"))
+            self.after(2000, self.resume_bridge) # Ripristina bridge dopo format
 
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""
@@ -557,6 +804,10 @@ class JTEApp(ctk.CTk):
         waiting_for_values = False
         
         while self.running:
+            if self.is_suspended:
+                time.sleep(0.5)
+                continue
+                
             try:
                 if self.jte_comm:
                     # Legge pacchetti in arrivo

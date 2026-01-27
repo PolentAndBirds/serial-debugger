@@ -103,5 +103,34 @@ class TCPSerialBridge:
             self._read_buffer.clear()
             self.in_waiting = 0
 
+    def send_at_command(self, command, timeout=5.0):
+        """
+        Sends an AT command directly to the ESP32 and waits for a response.
+        This is useful for commands like AT+FFMT while the bridge is active.
+        """
+        if not self.is_open:
+            return "Error: Not connected"
+            
+        print(f"Sending AT command through bridge: {command}")
+        if isinstance(command, str):
+            command = command.encode('ascii')
+            
+        # Clear buffer before sending to avoid old data
+        self.reset_input_buffer()
+        self.sock.sendall(command)
+        
+        # Wait for a line containing OK or ERROR
+        start_time = time.time()
+        response = ""
+        while time.time() - start_time < timeout:
+            chunk = self.read(1024).decode('ascii', errors='ignore')
+            if chunk:
+                response += chunk
+                if "OK" in response or "ERROR" in response:
+                    return response.strip()
+            time.sleep(0.1)
+            
+        return response.strip() if response else "Error: Timeout"
+
     def flush(self):
         pass # Not applicable for TCP in the same way, but needed for compatibility
