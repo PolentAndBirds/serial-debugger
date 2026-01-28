@@ -209,6 +209,20 @@ class JTEApp(ctk.CTk):
                                        fg_color="#555555", hover_color="#333333",
                                        command=self.start_format_spiffs)
         self.btn_format.pack(side="left")
+
+        # Nuova riga per azioni singole: Upload e Flash Only
+        single_flash_row = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        single_flash_row.pack(pady=5, padx=10, fill="x")
+
+        self.btn_upload_only = ctk.CTkButton(single_flash_row, text="📤 Upload Only", width=90,
+                                            fg_color="#4682B4", hover_color="#36648B",
+                                            command=lambda: self.start_file_transfer(mode="upload"))
+        self.btn_upload_only.pack(side="left", padx=(0, 5), expand=True, fill="x")
+
+        self.btn_flash_only = ctk.CTkButton(single_flash_row, text="🔥 Flash Only", width=90,
+                                           fg_color="#CD5C5C", hover_color="#B22222",
+                                           command=lambda: self.start_file_transfer(mode="flash"))
+        self.btn_flash_only.pack(side="left", expand=True, fill="x")
         
         # Barra di progresso per il caricamento
         self.progress_bar = ctk.CTkProgressBar(self.navigation_frame)
@@ -313,13 +327,17 @@ class JTEApp(ctk.CTk):
         self.clear_plot_data()
         self.update_action_buttons_state()
 
-    def update_action_buttons_state(self):
+    def update_action_buttons_state(self, loading=False):
         """Abilita o disabilita i pulsanti in base allo stato della connessione."""
-        state = "normal" if self.running else "disabled"
+        state = "normal" if self.running and not loading else "disabled"
         self.btn_disconnect.configure(state=state)
         self.btn_flash.configure(state=state)
         self.btn_format.configure(state=state)
         self.btn_reset.configure(state=state)
+        if hasattr(self, 'btn_upload_only'):
+            self.btn_upload_only.configure(state=state)
+        if hasattr(self, 'btn_flash_only'):
+            self.btn_flash_only.configure(state=state)
 
     def pause_bridge(self):
         """Sospende temporaneamente la comunicazione senza pulire la UI."""
@@ -523,7 +541,7 @@ class JTEApp(ctk.CTk):
             self.hex_path_var.set(path)
             self.btn_select_hex.configure(text=os.path.basename(path))
 
-    def start_file_transfer(self):
+    def start_file_transfer(self, mode="both"):
         """Avvia il trasferimento del file HEX in un thread separato."""
         file_path = self.hex_path_var.get()
         if not file_path:
@@ -540,10 +558,10 @@ class JTEApp(ctk.CTk):
         # Disconnetti la comunicazione attuale ma senza pulire UI
         self.pause_bridge()
         
-        self.btn_flash.configure(state="disabled")
-        threading.Thread(target=self.file_transfer_thread, args=(ip, file_path), daemon=True).start()
+        self.update_action_buttons_state(loading=True)
+        threading.Thread(target=self.file_transfer_thread, args=(ip, file_path, mode), daemon=True).start()
 
-    def file_transfer_thread(self, ip, file_path):
+    def file_transfer_thread(self, ip, file_path, mode="both"):
         """Logica di trasferimento file (basata sullo script fornito)."""
         port = 9000
         try:
@@ -556,86 +574,94 @@ class JTEApp(ctk.CTk):
                 s.settimeout(20)
                 s.connect((ip, port))
                 
-                # Inizio comando flash
-                s.sendall(f"AT+FSTART={file_size},{filename}\r".encode())
-                
-                response = s.recv(1024).decode(errors='ignore')
-                if "OK" in response:
-                    self.after(0, lambda: self.progress_label.configure(text="Uploading...", text_color="cyan"))
-                    bytes_sent = 0
+                # --- PARTE UPLOAD ---
+                if mode in ["both", "upload"]:
+                    s.sendall(f"AT+FSTART={file_size},{filename}\r".encode())
                     
-                    with open(file_path, "rb") as f:
-                        while True:
-                            chunk = f.read(4096)
-                            if not chunk:
-                                break
-                            s.sendall(chunk)
-                            bytes_sent += len(chunk)
-                            
-                            progress = bytes_sent / file_size
-                            self.after(0, lambda p=progress: self.progress_bar.set(p))
-                            self.after(0, lambda p=progress: self.progress_label.configure(text=f"Uploading: {p*100:.1f}%"))
-                            
-                            # Piccola pausa per dare respiro a SPIFFS (come da script originale)
-                            time.sleep(0.005) 
-                    
-                    self.after(0, lambda: self.progress_label.configure(text="Finalizing Upload...", text_color="orange"))
-                    final_response = s.recv(1024).decode(errors='ignore')
-                    
-                    if "OK" in final_response:
-                        # 4. Comando di FLASH effettivo
-                        model = self.stm32_model_var.get()
-                        self.after(0, lambda: self.progress_label.configure(text=f"Flashing {model}...", text_color="yellow"))
-                        s.sendall(f"AT+STMFLASH={model},{filename}\r".encode())
+                    response = s.recv(1024).decode(errors='ignore')
+                    if "OK" in response:
+                        self.after(0, lambda: self.progress_label.configure(text="Uploading...", text_color="cyan"))
+                        bytes_sent = 0
                         
-                        # Il flash può richiedere tempo, leggiamo i progressi in un loop
-                        s.settimeout(120) 
-                        buffer = ""
-                        while True:
-                            try:
-                                chunk = s.recv(1024).decode(errors='ignore')
-                                if not chunk: break
-                                buffer += chunk
+                        with open(file_path, "rb") as f:
+                            while True:
+                                chunk = f.read(4096)
+                                if not chunk:
+                                    break
+                                s.sendall(chunk)
+                                bytes_sent += len(chunk)
                                 
-                                # Processa riga per riga la risposta dell'ESP32
-                                while "\n" in buffer:
-                                    line, buffer = buffer.split("\n", 1)
-                                    line = line.strip()
-                                    if not line: continue
-                                    
-                                    if "+PROGRESS:" in line:
-                                        try:
-                                            perc = int(line.split(":")[1].replace("%", "").strip())
-                                            self.after(0, lambda p=perc: self.progress_bar.set(p/100))
-                                            self.after(0, lambda p=perc: self.progress_label.configure(text=f"Flashing: {p}%", text_color="yellow"))
-                                        except: pass
-                                    
-                                    elif "+ERROR: WRONG CHIP" in line:
-                                        self.after(0, lambda l=line: self.progress_label.configure(text=f"Error: {l}", text_color="red"))
-                                        return
-                                    
-                                    elif "+SUCCESS:" in line:
-                                        info = line.split(":", 1)[1].strip()
-                                        self.after(0, lambda i=info: self.progress_label.configure(text=f"Success: {i}", text_color="green"))
-                                        self.after(0, lambda: self.progress_bar.set(1.0))
-                                        return # Finito con successo
-                                        
-                                    elif "OK" in line and "+SUCCESS" not in line:
-                                        # Fine generica della sessione AT
-                                        pass
-                                        
-                            except socket.timeout:
-                                self.after(0, lambda: self.progress_label.configure(text="Flash Timeout!", text_color="red"))
-                                break
+                                progress = bytes_sent / file_size
+                                self.after(0, lambda p=progress: self.progress_bar.set(p))
+                                self.after(0, lambda p=progress: self.progress_label.configure(text=f"Uploading: {p*100:.1f}%"))
+                                
+                                # Piccola pausa per dare respiro a SPIFFS
+                                time.sleep(0.005) 
+                        
+                        self.after(0, lambda: self.progress_label.configure(text="Finalizing Upload...", text_color="orange"))
+                        final_response = s.recv(1024).decode(errors='ignore')
+                        
+                        if "OK" not in final_response:
+                            self.after(0, lambda: self.progress_label.configure(text=f"Upload Error: {final_response.strip()}", text_color="red"))
+                            return
+                            
+                        if mode == "upload":
+                            self.after(0, lambda: self.progress_label.configure(text="Upload Success!", text_color="green"))
+                            self.after(0, lambda: self.progress_bar.set(1.0))
+                            return
                     else:
-                        self.after(0, lambda: self.progress_label.configure(text=f"Upload Error: {final_response.strip()}", text_color="red"))
-                else:
-                    self.after(0, lambda: self.progress_label.configure(text=f"Error: {response.strip()}", text_color="red"))
+                        self.after(0, lambda: self.progress_label.configure(text=f"Error: {response.strip()}", text_color="red"))
+                        return
+
+                # --- PARTE FLASH ---
+                if mode in ["both", "flash"]:
+                    model = self.stm32_model_var.get()
+                    self.after(0, lambda: self.progress_label.configure(text=f"Flashing {model}...", text_color="yellow"))
+                    s.sendall(f"AT+STMFLASH={model},{filename}\r".encode())
+                    
+                    # Il flash può richiedere tempo, leggiamo i progressi in un loop
+                    s.settimeout(120) 
+                    buffer = ""
+                    while True:
+                        try:
+                            chunk = s.recv(1024).decode(errors='ignore')
+                            if not chunk: break
+                            buffer += chunk
+                            
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                line = line.strip()
+                                if not line: continue
+                                
+                                if "+PROGRESS:" in line:
+                                    try:
+                                        perc = int(line.split(":")[1].replace("%", "").strip())
+                                        self.after(0, lambda p=perc: self.progress_bar.set(p/100))
+                                        self.after(0, lambda p=perc: self.progress_label.configure(text=f"Flashing: {p}%", text_color="yellow"))
+                                    except: pass
+                                
+                                elif "+ERROR: WRONG CHIP" in line:
+                                    self.after(0, lambda l=line: self.progress_label.configure(text=f"Error: {l}", text_color="red"))
+                                    return
+                                
+                                elif "+SUCCESS:" in line:
+                                    info = line.split(":", 1)[1].strip()
+                                    self.after(0, lambda i=info: self.progress_label.configure(text=f"Success: {i}", text_color="green"))
+                                    self.after(0, lambda: self.progress_bar.set(1.0))
+                                    return
+                                    
+                                elif "OK" in line and "+SUCCESS" not in line:
+                                    pass
+                                    
+                        except socket.timeout:
+                            self.after(0, lambda: self.progress_label.configure(text="Flash Timeout!", text_color="red"))
+                            break
         except Exception as e:
-            self.after(0, lambda: self.progress_label.configure(text=f"Error: {str(e)}", text_color="red"))
+            error_msg = str(e)
+            self.after(0, lambda: self.progress_label.configure(text=f"Error: {error_msg}", text_color="red"))
         finally:
-            self.after(0, lambda: self.btn_flash.configure(state="normal"))
-            self.after(2000, self.resume_bridge) # Ripristina bridge dopo flash
+            self.after(0, lambda: self.update_action_buttons_state(loading=False))
+            self.after(2000, self.resume_bridge)
 
     def start_format_spiffs(self):
         """Avvia la formattazione SPIFFS in un thread separato."""
@@ -650,7 +676,7 @@ class JTEApp(ctk.CTk):
             return
 
         self.pause_bridge() # Sospende senza pulire UI
-        self.btn_format.configure(state="disabled")
+        self.update_action_buttons_state(loading=True)
         threading.Thread(target=self.format_spiffs_thread, args=(ip,), daemon=True).start()
 
     def format_spiffs_thread(self, ip):
@@ -658,20 +684,22 @@ class JTEApp(ctk.CTk):
         try:
             self.after(0, lambda: self.progress_label.configure(text="Formatting SPIFFS (Wait...)", text_color="orange"))
             
-            # Usiamo sempre un socket pulito per i comandi AT (fuori dal bypass)
-            port = 9000
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(60)
-                s.connect((ip, port))
+                s.settimeout(10)
+                s.connect((ip, 9000))
                 s.sendall(b"AT+FFMT\r")
+                # Aspetta la conferma OK dall'ESP32 prima di chiudere
                 response = s.recv(1024).decode(errors='ignore')
+                if "OK" not in response:
+                    raise Exception(f"Format rejected: {response}")
                 
-            self.after(0, lambda: self.progress_label.configure(text=f"Result: {response.strip()}", text_color="green" if "OK" in response else "red"))
+            self.after(0, lambda: self.progress_label.configure(text="Format command sent", text_color="green"))
         except Exception as e:
-            self.after(0, lambda: self.progress_label.configure(text=f"Error: {str(e)}", text_color="red"))
+            error_msg = str(e)
+            self.after(0, lambda: self.progress_label.configure(text=f"Error: {error_msg}", text_color="red"))
         finally:
-            self.after(0, lambda: self.btn_format.configure(state="normal"))
-            self.after(2000, self.resume_bridge) # Ripristina bridge dopo format
+            self.after(0, lambda: self.update_action_buttons_state(loading=False))
+            self.after(0, self.resume_bridge) # Ripristina bridge subito dopo format
 
     def select_table(self, idx):
         """Comanda al protocollo di cambiare tabella e pulisce l'interfaccia."""
