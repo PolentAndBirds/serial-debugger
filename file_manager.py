@@ -10,7 +10,7 @@ class FileManager:
     def __init__(self, app_callback):
         self.app = app_callback
 
-    def file_transfer_thread(self, ip, file_path, mode, stm32_model):
+    def file_transfer_thread(self, ip, file_path, mode, stm32_model, format_after_flash=False):
         """Logica di trasferimento file (basata sullo script fornito)."""
         port = 9000
         try:
@@ -65,7 +65,8 @@ class FileManager:
                 if mode in ["both", "flash"]:
                     model = stm32_model
                     self.app.after(0, lambda: self.app.progress_label.configure(text=f"Flashing {model}...", text_color="yellow"))
-                    s.sendall(f"AT+STMFLASH={model},{filename}\r".encode())
+                    suffix = ",1" if format_after_flash else ""
+                    s.sendall(f"AT+STMFLASH={model},{filename}{suffix}\r".encode())
                     
                     s.settimeout(120) 
                     buffer = ""
