@@ -71,9 +71,12 @@ class JTEApp(ctk.CTk):
         ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_menu = ctk.CTkOptionMenu(serial_frame, variable=self.port_var, 
                                           values=ports if ports else ["Nessuna Porta"],
-                                          command=self.connect_serial, width=140)
-        self.port_menu.pack(side="left", padx=(0, 5))
-        self.port_menu.bind("<Button-1>", lambda e: self.refresh_ports())
+                                          width=100)
+        self.port_menu.pack(side="left", padx=(0, 2))
+
+        self.btn_connect_serial = ctk.CTkButton(serial_frame, text="▶", width=35, 
+                                               command=lambda: self.connect_serial(self.port_var.get()))
+        self.btn_connect_serial.pack(side="left", padx=(0, 2))
 
         self.btn_refresh_ports = ctk.CTkButton(serial_frame, text="↻", width=30, command=self.refresh_ports)
         self.btn_refresh_ports.pack(side="left")
@@ -179,7 +182,7 @@ class JTEApp(ctk.CTk):
 
     def refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        self.port_menu.configure(values=ports if ports else ["Nessuna Porta"])
+        self.port_menu.configure(values=ports if ports else ["No Serial Port"])
 
     def on_connect_wifi_click(self, selection):
         if "(" in selection and ")" in selection:
@@ -188,15 +191,17 @@ class JTEApp(ctk.CTk):
             self.connect_serial(ip, is_tcp=True)
 
     def connect_serial(self, port, is_tcp=False):
-        if port == "Nessuna Porta" or not port: return
+        if not port or port in ["Nessuna Porta", "No Serial Port", "No devices", "Serial port"]: 
+            print(f"Skipping connection for invalid port: {port}")
+            return
         self.disconnect()
         
         try:
-            self.version_label.configure(text=f"Connessione {'TCP' if is_tcp else 'Seriale'}...", text_color="orange")
+            self.version_label.configure(text=f"Connecting {'TCP' if is_tcp else 'Serial'}...", text_color="orange")
             if is_tcp:
                 bridge = TCPSerialBridge(port, port=9000)
                 if not bridge.open():
-                    raise Exception(f"Impossibile connettersi a {port}:9000")
+                    raise Exception(f"Unable to connect to {port}:9000")
                 self.jte_comm = JTEProtocol(bridge)
             else:
                 self.jte_comm = JTEProtocol(port)
@@ -207,7 +212,7 @@ class JTEApp(ctk.CTk):
             threading.Thread(target=self.comm_thread, daemon=True).start()
             self.update_action_buttons_state()
         except Exception as e:
-            self.version_label.configure(text=f"Errore: {str(e)}", text_color="red")
+            self.version_label.configure(text=f"Error: {str(e)}", text_color="red")
             self.running = False
             self.update_action_buttons_state()
 
@@ -217,7 +222,7 @@ class JTEApp(ctk.CTk):
             self.jte_comm.close()
             self.jte_comm = None
         
-        self.version_label.configure(text="Disconnesso", text_color="gray")
+        self.version_label.configure(text="Disconnected", text_color="gray")
         self.current_table_idx = -1
         self.table_buttons = []
         for child in self.table_btns_frame.winfo_children(): child.destroy()
@@ -230,6 +235,9 @@ class JTEApp(ctk.CTk):
         state = "normal" if self.running and not loading else "disabled"
         for btn in [self.btn_disconnect, self.btn_flash, self.btn_format, self.btn_reset, self.btn_upload_only, self.btn_flash_only]:
             btn.configure(state=state)
+        # Abilita Connetti solo se non siamo già in corsa
+        if hasattr(self, 'btn_connect_serial'):
+            self.btn_connect_serial.configure(state="disabled" if self.running else "normal")
 
     def pause_bridge(self):
         self.is_suspended = True
@@ -271,7 +279,7 @@ class JTEApp(ctk.CTk):
         WiFiSetupDialog(self)
 
     def select_hex_file(self):
-        path = filedialog.askopenfilename(filetypes=[("HEX files", "*.hex"), ("All files", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("HEX files", "*.hex"), ("BIN files", "*.bin"), ("All files", "*.*")])
         if path:
             self.hex_path_var.set(path)
             self.btn_select_hex.configure(text=os.path.basename(path))
@@ -312,7 +320,7 @@ class JTEApp(ctk.CTk):
         if not self.jte_comm: return
         self.var_rows = {}
         for child in self.home_frame.winfo_children(): child.destroy()
-        ctk.CTkLabel(self.home_frame, text="Caricamento variabili...").pack(pady=20)
+        ctk.CTkLabel(self.home_frame, text="Loading variables...").pack(pady=20)
         
         self.jte_comm.select_table(idx)
         self.update_table_buttons()
@@ -320,7 +328,7 @@ class JTEApp(ctk.CTk):
 
     def perform_reset(self):
         if not self.jte_comm: return
-        self.version_label.configure(text="Reset in corso...", text_color="orange")
+        self.version_label.configure(text="Resetting...", text_color="orange")
         for child in self.home_frame.winfo_children(): child.destroy()
         self.var_rows = {}
         self.jte_comm.hard_reset()
@@ -367,6 +375,8 @@ class JTEApp(ctk.CTk):
                          waiting_for_values = False
                     elif res == "NEW_TABLE" or res == "VERSION_UPDATED":
                         self.after(0, self.update_table_buttons)
+                    elif res == "DEBUG_MESSAGE":
+                        print(f"DEBUG FROM MCU: {self.jte_comm.last_debug_msg}")
                     
                     now = time.time()
                     time_since_last_tx = now - self.jte_comm.last_tx_time

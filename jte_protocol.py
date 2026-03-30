@@ -25,8 +25,9 @@ class JTEProtocol:
             self.ser.baudrate = baudrate
             self.ser.timeout = timeout
             # Segnali di controllo necessari per la board STM32
+            # RTS messo a False di default per evitare reset accidentali su molte board
             self.ser.dtr = False
-            self.ser.rts = True
+            self.ser.rts = False
             self.ser.open()
         
         # Lock per garantire l'accesso thread-safe alla porta seriale
@@ -40,6 +41,7 @@ class JTEProtocol:
         self.is_loading = False # Flag attivato durante l'aggiornamento dei nomi
         self.last_tx_time = time.time()
         self._temp_variables = [] # Buffer temporaneo per i nomi delle variabili in arrivo
+        self.last_debug_msg = ""
 
     def close(self):
         """Chiude la connessione seriale in modo sicuro."""
@@ -51,7 +53,7 @@ class JTEProtocol:
             pass
             
         with self.lock:
-            if self.ser.is_open:
+            if hasattr(self.ser, 'is_open') and self.ser.is_open:
                 self.ser.close()
         self.connected = False
 
@@ -81,7 +83,9 @@ class JTEProtocol:
         0xf4: Stringa di debug
         """
         with self.lock:
-            if not self.ser.in_waiting:
+            # Per compatibility con TCPSerialBridge e pyserial
+            in_waiting = getattr(self.ser, 'in_waiting', 0)
+            if not in_waiting:
                 return None
             
             # Legge il primo byte (header del pacchetto)
@@ -103,8 +107,6 @@ class JTEProtocol:
                 payload.append(b[0])
             else:
                 return None # Timeout durante la ricezione del pacchetto completo
-            #debug dati ricevuti(commento per disabilitare)
-            #print(f"RX -> {hex(type_byte)} Payload: {payload.hex(' ')}") 
                 
             # Gestione dei vari tipi di pacchetti ricevuti
             if type_byte == 0xf2: # Pacchetto Versione
@@ -201,6 +203,11 @@ class JTEProtocol:
                 # Ricezione di un pacchetto 0xf3 vuoto indica che tutte le tabelle sono state trasmesse
                 print("--- FINE CARICAMENTO TABELLE ---")
                 return "TABLES_LOADED"
+        
+        elif packet['type'] == 0xf4: # Messaggi di debug dal firmware
+            self.last_debug_msg = packet['value']
+            print(f"MCU Debug: {self.last_debug_msg}")
+            return "DEBUG_MESSAGE"
 
         return True
 
@@ -236,7 +243,8 @@ class JTEProtocol:
         AT\r -> #$ -> #:#$
         """
         with self.lock:
-            self.ser.reset_input_buffer()
+            if hasattr(self.ser, 'reset_input_buffer'):
+                self.ser.reset_input_buffer()
         
         print("Inizio sequenza di inizializzazione compatibile...")
         self.is_loading = True
@@ -269,9 +277,10 @@ class JTEProtocol:
             
         # Toggle DTR per connessioni seriali fisiche
         try:
-            self.ser.dtr = True
-            time.sleep(0.2)
-            self.ser.dtr = False
+            if hasattr(self.ser, 'dtr'):
+                self.ser.dtr = True
+                time.sleep(0.2)
+                self.ser.dtr = False
         except:
             pass
             
