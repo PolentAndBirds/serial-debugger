@@ -49,6 +49,8 @@ class JTEApp(ctk.CTk):
         self.plot_manager = PlotManager(self.plot_container, self)
         self.plot_manager.update_plot()
         
+        self.load_settings() # Carica impostazioni salvate
+        
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.update_action_buttons_state()
 
@@ -288,7 +290,8 @@ class JTEApp(ctk.CTk):
         path = filedialog.askopenfilename(filetypes=[("HEX files", "*.hex"), ("BIN files", "*.bin"), ("All files", "*.*")])
         if path:
             self.hex_path_var.set(path)
-            self.btn_select_hex.configure(text=os.path.basename(path))
+            self.btn_select_hex.configure(text=os.path.basename(path), text_color="#40A040")
+            self.progress_label.configure(text=f"Ready: {os.path.basename(path)}", text_color="gray")
 
     def start_file_transfer(self, mode="both"):
         file_path = self.hex_path_var.get()
@@ -378,11 +381,49 @@ class JTEApp(ctk.CTk):
         self.plot_manager.toggle_variable(idx, is_active)
 
     def on_closing(self):
+        self.save_settings()
         self.running = False
         if self.jte_comm: self.jte_comm.close()
         self.quit()
         try: self.destroy()
         except: pass
+
+    def load_settings(self):
+        """Ripristina lo stato dell'ultima sessione."""
+        config = load_config(self.config_file)
+        
+        # Ripristino Firmware
+        last_hex = config.get("last_hex_path", "")
+        if last_hex and os.path.exists(last_hex):
+            self.hex_path_var.set(last_hex)
+            self.btn_select_hex.configure(text=os.path.basename(last_hex), text_color="#40A040")
+        
+        # Ripristino Opzioni
+        self.stm32_model_var.set(config.get("stm32_model", "F3"))
+        self.format_after_flash_var.set(config.get("format_after_flash", False))
+        self.uart_flash_var.set(config.get("uart_flash", False))
+        
+        # Ripristino Porte (se ancora presenti)
+        last_port = config.get("last_port", "")
+        if last_port and last_port in self.port_menu.cget("values"):
+            self.port_var.set(last_port)
+            
+        last_wifi = config.get("last_wifi_device", "")
+        if last_wifi and last_wifi in self.tcp_menu.cget("values"):
+            self.tcp_device_var.set(last_wifi)
+
+    def save_settings(self):
+        """Salva lo stato corrente su file json."""
+        config = {
+            "wifi_devices": self.wifi_devices,
+            "last_hex_path": self.hex_path_var.get(),
+            "stm32_model": self.stm32_model_var.get(),
+            "format_after_flash": self.format_after_flash_var.get(),
+            "uart_flash": self.uart_flash_var.get(),
+            "last_port": self.port_var.get(),
+            "last_wifi_device": self.tcp_device_var.get()
+        }
+        save_config(config, self.config_file)
 
     def modify_variable(self, idx, action):
         if self.jte_comm: self.jte_comm.modify_var(idx, action)
