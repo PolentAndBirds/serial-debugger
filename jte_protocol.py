@@ -278,9 +278,12 @@ class JTEProtocol:
         # Toggle DTR per connessioni seriali fisiche
         try:
             if hasattr(self.ser, 'dtr'):
+                self.ser.rts = True
                 self.ser.dtr = True
                 time.sleep(0.2)
                 self.ser.dtr = False
+                time.sleep(0.2)
+                self.ser.rts = False
         except:
             pass
             
