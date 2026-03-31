@@ -14,6 +14,7 @@ from file_manager import FileManager
 from plot_manager import PlotManager
 from network_scanner import NetworkScanner
 from app_config import load_config, save_config
+from uart_flash_manager import STM32FlashManager
 
 class JTEApp(ctk.CTk):
     """
@@ -144,7 +145,12 @@ class JTEApp(ctk.CTk):
         # Main Flash Actions
         self.btn_flash = ctk.CTkButton(self.navigation_frame, text="FLASH (Upload + Write)", 
                                       font=ctk.CTkFont(weight="bold"), command=self.start_file_transfer)
-        self.btn_flash.pack(pady=(10, 5), padx=10, fill="x")
+        self.btn_flash.pack(pady=(10, 2), padx=10, fill="x")
+
+        self.uart_flash_var = ctk.BooleanVar(value=False)
+        self.cb_uart_flash = ctk.CTkCheckBox(self.navigation_frame, text="Direct UART Flash", 
+                                            variable=self.uart_flash_var, font=ctk.CTkFont(size=11))
+        self.cb_uart_flash.pack(pady=(0, 5), padx=10, fill="x")
 
         # Extra Flash Actions Row
         extra_fw_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
@@ -296,11 +302,44 @@ class JTEApp(ctk.CTk):
             return
         
         ip = selection.split("(")[1].split(")")[0]
-        self.pause_bridge()
-        self.update_action_buttons_state(loading=True)
-        threading.Thread(target=self.file_manager.file_transfer_thread, 
-                         args=(ip, file_path, mode, self.stm32_model_var.get(), self.format_after_flash_var.get()), 
-                         daemon=True).start()
+        
+        if self.uart_flash_var.get():
+            # Modalità UART Diretta
+            port = self.port_var.get()
+            if not port or port in ["Nessuna Porta", "No Serial Port", "Serial port"]:
+                self.progress_label.configure(text="Select a COM port!", text_color="red")
+                return
+            
+            self.disconnect() # Chiude la porta se usata dal protocollo
+            self.update_action_buttons_state(loading=True)
+            threading.Thread(target=self.uart_flash_thread, args=(port, file_path), daemon=True).start()
+        else:
+            # Modalità WiFi Bridge (esistente)
+            self.pause_bridge()
+            self.update_action_buttons_state(loading=True)
+            threading.Thread(target=self.file_manager.file_transfer_thread, 
+                             args=(ip, file_path, mode, self.stm32_model_var.get(), self.format_after_flash_var.get()), 
+                             daemon=True).start()
+
+    def uart_flash_thread(self, port, file_path):
+        """Thread worker per il flash tramite UART diretta."""
+        try:
+            self.after(0, lambda: self.progress_label.configure(text="Starting UART Flash...", text_color="orange"))
+            
+            def progress_cb(current, total):
+                p = current / total
+                self.after(0, lambda: self.progress_bar.set(p))
+                self.after(0, lambda: self.progress_label.configure(text=f"Flashing UART: {p*100:.1f}%"))
+
+            flasher = STM32FlashManager(port)
+            if flasher.flash_hex(file_path, progress_callback=progress_cb):
+                self.after(0, lambda: self.progress_label.configure(text="UART Flash Success!", text_color="green"))
+            else:
+                self.after(0, lambda: self.progress_label.configure(text="UART Flash Failed!", text_color="red"))
+        except Exception as e:
+            self.after(0, lambda: self.progress_label.configure(text=f"UART Error: {str(e)}", text_color="red"))
+        finally:
+            self.after(0, lambda: self.update_action_buttons_state(loading=False))
 
     def start_format_spiffs(self):
         selection = self.tcp_device_var.get()
