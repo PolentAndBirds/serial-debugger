@@ -184,9 +184,19 @@ class JTEApp(ctk.CTk):
         self.home_frame = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
         self.home_frame.grid(row=0, column=1, sticky="nsew")
 
-        # Plot
+        # Contenitore Plot
         self.plot_container = ctk.CTkFrame(self, corner_radius=0, fg_color="#1a1a1a")
         self.plot_container.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        
+        # Header del Plot (per i controlli)
+        self.plot_ctrl_frame = ctk.CTkFrame(self.plot_container, fg_color="transparent", height=28)
+        self.plot_ctrl_frame.pack(fill="x", side="top", padx=5, pady=(2, 0))
+
+        # Pulsante Pausa Plot (ora visibile sopra il grafico)
+        self.btn_pause_plot = ctk.CTkButton(self.plot_ctrl_frame, text="⏸ Pause", width=70, height=22,
+                                           fg_color="#3a3a3a", hover_color="#505050", font=ctk.CTkFont(size=11),
+                                           command=self.toggle_plot_pause)
+        self.btn_pause_plot.pack(side="right", padx=5)
 
     def refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
@@ -376,6 +386,16 @@ class JTEApp(ctk.CTk):
         self.jte_comm.hard_reset()
         self.update_table_buttons()
         self.plot_manager.clear_data()
+
+    def toggle_plot_pause(self):
+        if not hasattr(self, 'plot_manager'): return
+        paused = self.plot_manager.toggle_pause()
+        if paused:
+            self.btn_pause_plot.configure(text="▶ Resume", fg_color="#40A040", hover_color="#308030")
+            self.progress_label.configure(text="Plot Paused", text_color="orange")
+        else:
+            self.btn_pause_plot.configure(text="⏸ Pause", fg_color="#3a3a3a", hover_color="#505050")
+            self.progress_label.configure(text="Plot Resumed (Cleared)", text_color="green")
 
     def toggle_plot_variable(self, idx, is_active):
         self.plot_manager.toggle_variable(idx, is_active)
