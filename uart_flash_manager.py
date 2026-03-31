@@ -5,8 +5,8 @@ import os
 
 class STM32FlashManager:
     """
-    Gestisce la programmazione di MCU STM32 tramite il bootloader UART integrato.
-    Ottimizzato per STM32G4 e gestione protezioni.
+    Gestisce la programmazione di MCU STM32 tramite il bootloader UART.
+    Mantiene la porta aperta per tutta la durata del processo.
     """
     ACK = 0x79
     NACK = 0x1F
@@ -17,80 +17,69 @@ class STM32FlashManager:
         self.timeout = timeout
         self.ser = None
 
-    def enter_bootloader(self):
-        """Sequenza RESET/BOOT0 con logica invertita dell'utente."""
-        print("Configurazione segnali BOOT0 (RTS) e RESET (DTR)...")
-        try:
-            s = serial.Serial()
-            s.port = self.port
-            s.baudrate = 115200
-            s.dsrdtr = False
-            s.rtscts = False
-            s.dtr = False # reset high (inactive)
-            s.rts = True  # boot low (inactive)
-            s.open()
-            time.sleep(0.1)
+    def _set_signals_boot(self):
+        """Sequenza hardware per entrare in bootloader."""
+        print("Resetting into Bootloader mode...")
+        self.ser.parity = serial.PARITY_NONE
+        self.ser.dtr = False # reset high
+        self.ser.rts = True  # boot low
+        time.sleep(0.1)
+        self.ser.dtr = True  # reset low (active)
+        time.sleep(0.1)
+        self.ser.rts = False # boot high (active)
+        time.sleep(0.2)
+        self.ser.dtr = False # reset high (released)
+        time.sleep(0.2)
 
-            s.dtr = True  # reset low (active)
-            time.sleep(0.1)
-            s.rts = False # boot high (active)
-            time.sleep(0.2)
-            s.dtr = False # reset high (released)
-            time.sleep(0.2)
-            print("Reset rilasciato con BOOT0 attivo.")
-            s.close()
-        except Exception as e:
-            print(f"Errore durante enter_bootloader: {e}")
-
-    def exit_bootloader(self):
-        """Reset hardware normale."""
-        try:
-            with serial.Serial(self.port, 115200) as s:
-                s.rts = True # boot low
-                s.dtr = True # reset low
-                time.sleep(0.1)
-                s.dtr = False # reset high
-        except: pass
+    def _set_signals_exit(self):
+        """Sequenza hardware per avviare il firmware (normal mode)."""
+        print("Resetting into Normal mode...")
+        self.ser.parity = serial.PARITY_NONE
+        time.sleep(0.1)
+        self.ser.rts = True # boot low
+        time.sleep(0.1)
+        self.ser.dtr = True # reset low
+        time.sleep(0.1)
+        self.ser.dtr = False # reset high
+        time.sleep(0.2)
 
     def connect(self):
-        """Inizializza la comunicazione con il bootloader (Sync byte 0x7F)."""
-        if self.ser and self.ser.is_open:
-            self.ser.close()
-        
-        try:
-            self.ser = serial.Serial(self.port, self.baudrate, parity=serial.PARITY_EVEN, timeout=self.timeout)
-            self.ser.rts = False # Mantieni boot high
-            self.ser.dtr = False # Mantieni reset released
-            time.sleep(0.1)
+        """Inizializza la comunicazione (Sync byte 0x7F)."""
+        # Il bootloader STM32 richiede PARITY EVEN
+        self.ser.parity = serial.PARITY_EVEN
+        self.ser.rts = False # Mantieni boot high
+        self.ser.dtr = False # Inattivo
+        time.sleep(0.1)
 
-            for i in range(10):
-                self.ser.write(b'\x7F')
-                res = self.ser.read(1)
-                if res and res[0] == self.ACK:
-                    print(f"Bootloader connesso (tentativo {i+1})")
-                    self.get_version()
-                    self.get_id()
-                    return True
-                time.sleep(0.2)
-            return False
-        except Exception as e:
-            print(f"Errore apertura: {e}")
-            return False
-
-    def get_version(self):
-        if self.send_command(0x01):
+        for i in range(10):
+            self.ser.write(b'\x7F')
             res = self.ser.read(1)
-            if not res: return
-            payload = self.ser.read(res[0] + 1)
+            if res and res[0] == self.ACK:
+                print(f"Bootloader connesso (tentativo {i+1})")
+                time.sleep(0.1)
+                self.ser.rts = True # Rilascia bootlow post-sync per stabilità
+                self.get_available_commands()
+                self.get_id()
+                return True
+            time.sleep(0.2)
+        return False
+
+    def get_available_commands(self):
+        if self.send_command(0x00):
+            n_bytes = self.ser.read(1)
+            if not n_bytes: return
+            payload = self.ser.read(n_bytes[0] + 1)
             if self.wait_for_ack():
-                print(f"Versione Bootloader: {hex(payload[0])}")
-                return payload
+                version = payload[0]
+                commands = list(payload[1:])
+                print(f"Versione BL: {hex(version)}, Comandi: {[hex(c) for c in commands]}")
+                return commands
         return None
 
     def get_id(self):
         if self.send_command(0x02):
             res = self.ser.read(1)
-            if not res: return
+            if not res or res[0] == self.NACK: return
             payload = self.ser.read(res[0] + 1)
             if self.wait_for_ack():
                 print(f"Chip ID: {payload.hex().upper()}")
@@ -104,33 +93,34 @@ class STM32FlashManager:
     def wait_for_ack(self):
         res = self.ser.read(1)
         if not res: return False
-        if res[0] == self.NACK:
-             print("Ricevuto NACK")
-             return False
+        if res[0] == self.NACK: return False
         return res[0] == self.ACK
 
     def read_unprotect(self):
-        print("Invio comando Read Unprotect (0x82)...")
         if self.send_command(0x82):
             return self.wait_for_ack()
         return False
 
     def write_unprotect(self):
-        print("Invio comando Write Unprotect (0x73)...")
         if self.send_command(0x73):
             return self.wait_for_ack()
         return False
 
     def erase_all(self):
-        print("Tentativo cancellazione (Erase 0x43)...")
-        if self.send_command(0x43):
-            self.ser.write(b'\xFF\x00')
-            if self.wait_for_ack(): return True
-        
-        print("Tentativo Extended Erase (0x44)...")
-        if self.send_command(0x44):
-            self.ser.write(b'\xFF\xFF\x00')
-            return self.wait_for_ack()
+        print("Inizio cancellazione...")
+        old_timeout = self.ser.timeout
+        self.ser.timeout = 10.0
+        try:
+            if self.send_command(0x44):
+                for data, cs in [(b'\xFF\xFF', 0x00), (b'\xFF\xFE', 0x01), (b'\xFF\xFD', 0x02)]:
+                    self.ser.write(data + bytes([cs]))
+                    if self.wait_for_ack(): return True
+                    time.sleep(0.1)
+            if self.send_command(0x43):
+                self.ser.write(b'\xFF\x00')
+                return self.wait_for_ack()
+        finally:
+            self.ser.timeout = old_timeout
         return False
 
     def write_memory(self, address, data):
@@ -144,7 +134,11 @@ class STM32FlashManager:
         length = len(data) - 1
         cs = length
         for b in data: cs ^= b
-        self.ser.write(bytes([length]) + data + bytes([cs]))
+        self.ser.write(bytes([length]))
+        for i in range(0, len(data), 64):
+            self.ser.write(data[i : i+64])
+            time.sleep(0.002)
+        self.ser.write(bytes([cs]))
         return self.wait_for_ack()
 
     def flash_hex(self, hex_path, progress_callback=None):
@@ -152,38 +146,40 @@ class STM32FlashManager:
             data_blocks = self.parse_hex_simple(hex_path)
             if not data_blocks: raise Exception("HEX vuoto")
 
-            self.enter_bootloader()
-            if not self.connect(): raise Exception("Sync bootloader fallito")
+            # APRIAMO LA PORTA UNA VOLTA SOLA
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+            
+            # Procedura 1: Entra in bootloader
+            self._set_signals_boot()
+            
+            # Procedura 2: Sincronizzazione
+            if not self.connect():
+                # Fallback a 57600
+                print("Provo fallback a 57600...")
+                self.ser.baudrate = 57600
+                self._set_signals_boot()
+                if not self.connect(): raise Exception("Sync fallito")
 
-            print("Inizio cancellazione...")
+            # Procedura 3: Erase
+            print("Cancellazione...")
             if not self.erase_all():
-                print("Erase fallito. Provo Write Unprotect...")
+                print("Erase fallito. Provo sblocco protezioni...")
                 if self.write_unprotect():
-                    print("Scrittura sbloccata. Riconnessione...")
-                    if self.ser: self.ser.close()
-                    time.sleep(1.5)
-                    self.enter_bootloader()
-                    if not self.connect(): raise Exception("Riconnessione fallita")
-                    if self.erase_all(): goto_write = True
-                    else: goto_write = False
-                else: goto_write = False
+                    print("Scrittura sbloccata. Riavvio...")
+                    self._set_signals_boot()
+                    self.connect()
+                    if not self.erase_all(): raise Exception("Erase fallito post-sblocco")
+                elif self.read_unprotect():
+                    print("Lettura sbloccata. Riavvio...")
+                    self._set_signals_boot()
+                    self.connect()
+                    if not self.erase_all(): raise Exception("Erase fallito post-sblocco")
+                else:
+                    raise Exception("Impossibile cancellare la flash")
 
-                if not goto_write:
-                    print("Erase fallito. Provo Read Unprotect...")
-                    if self.read_unprotect():
-                        print("Chip sbloccato. Riconnessione...")
-                        if self.ser: self.ser.close()
-                        time.sleep(1.5)
-                        self.enter_bootloader()
-                        if not self.connect(): raise Exception("Riconnessione fallita")
-                        if not self.erase_all(): raise Exception("Erase fallito post-unprotect")
-                    else:
-                        raise Exception("Impossibile cancellare la flash")
-
+            # Procedura 4: Scrittura
             total_bytes = sum(len(b[1]) for b in data_blocks)
             bytes_written = 0
-            print(f"Scrittura in corso ({total_bytes} byte)...")
-
             for addr, data in data_blocks:
                 for i in range(0, len(data), 256):
                     chunk = data[i:i+256]
@@ -192,13 +188,15 @@ class STM32FlashManager:
                     bytes_written += len(chunk)
                     if progress_callback: progress_callback(bytes_written, total_bytes)
 
-            self.exit_bootloader()
+            # Procedura 5: Reset finale
+            self._set_signals_exit()
             return True
         except Exception as e:
-            print(f"Errore flash: {e}")
+            print(f"Errore: {e}")
             return False
         finally:
-            if self.ser: self.ser.close()
+            if self.ser and self.ser.is_open:
+                self.ser.close()
 
     def parse_hex_simple(self, file_path):
         blocks = []
