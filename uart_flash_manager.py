@@ -61,6 +61,8 @@ class STM32FlashManager:
                 self.get_available_commands()
                 self.get_id()
                 return True
+            elif res:
+                print(f"Risposta: {hex(res[0])} - {res}")
             time.sleep(0.2)
         return False
 

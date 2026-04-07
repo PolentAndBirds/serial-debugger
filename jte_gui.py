@@ -16,6 +16,12 @@ from network_scanner import NetworkScanner
 from app_config import load_config, save_config
 from uart_flash_manager import STM32FlashManager
 
+color_primary = "#1b435e"
+color_hover = "#00201e"
+color_secondary = "#563457"
+color_third = "#38667e"
+color_fourth = "#6a994e"
+
 class JTEApp(ctk.CTk):
     """
     Classe principale dell'applicazione.
@@ -23,8 +29,12 @@ class JTEApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("JTE Serial Debugger")
+        self.title("JDT Python")
         self.geometry("1400x900")
+        
+        # Imposta Icona
+        if os.path.exists("icon.ico"):
+            self.after(200, lambda: self.iconbitmap("icon.ico"))
         
         # Configurazione griglia
         self.grid_rowconfigure(0, weight=3)
@@ -67,21 +77,21 @@ class JTEApp(ctk.CTk):
         ctk.CTkLabel(self.navigation_frame, text="Connection", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
         
         # Seriale
-        serial_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        serial_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent", border_width=1, border_color="#322b50")
         serial_frame.pack(pady=5, padx=10, fill="x")
         
         self.port_var = ctk.StringVar(value="Serial port")
         ports = [p.device for p in serial.tools.list_ports.comports()]
         self.port_menu = ctk.CTkOptionMenu(serial_frame, variable=self.port_var, 
-                                          values=ports if ports else ["Nessuna Porta"],
-                                          width=100)
+                                          values=ports if ports else ["No ports"],
+                                          width=100, fg_color="gray25")
         self.port_menu.pack(side="left", padx=(0, 2))
 
-        self.btn_connect_serial = ctk.CTkButton(serial_frame, text="▶", width=35, 
+        self.btn_connect_serial = ctk.CTkButton(serial_frame, text="Connect",fg_color=color_secondary, hover_color=color_hover, width=60, 
                                                command=lambda: self.connect_serial(self.port_var.get()))
         self.btn_connect_serial.pack(side="left", padx=(0, 2))
 
-        self.btn_refresh_ports = ctk.CTkButton(serial_frame, text="↻", width=30, command=self.refresh_ports)
+        self.btn_refresh_ports = ctk.CTkButton(serial_frame, text="Refresh",fg_color=color_secondary, hover_color=color_hover, width=80, command=self.refresh_ports)
         self.btn_refresh_ports.pack(side="left")
 
         # WiFi
@@ -92,19 +102,19 @@ class JTEApp(ctk.CTk):
         self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
         self.tcp_device_var = ctk.StringVar(value=self.wifi_display_list[0] if self.wifi_display_list else "")
         
-        wifi_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        wifi_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent", border_width=1, border_color="#322b50")
         wifi_frame.pack(pady=5, padx=10, fill="x")
         
         self.tcp_menu = ctk.CTkOptionMenu(wifi_frame, variable=self.tcp_device_var, 
                                          values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
-                                         command=self.on_connect_wifi_click, width=140)
+                                         command=self.on_connect_wifi_click, width=140, fg_color="gray25")
         self.tcp_menu.pack(side="left", padx=(0, 5))
         self.tcp_menu.bind("<Button-1>", lambda e: self.start_scan())
 
-        self.btn_scan_tcp = ctk.CTkButton(wifi_frame, text="Scan", width=30, command=self.start_scan)
+        self.btn_scan_tcp = ctk.CTkButton(wifi_frame, text="Scan",fg_color=color_primary, hover_color=color_hover, width=30, command=self.start_scan)
         self.btn_scan_tcp.pack(side="left")
 
-        self.btn_setup_wifi = ctk.CTkButton(wifi_frame, text="Setup Bridge", width=85, command=self.open_wifi_setup)
+        self.btn_setup_wifi = ctk.CTkButton(wifi_frame, text="Setup Bridge",fg_color=color_primary, hover_color=color_hover, width=85, command=self.open_wifi_setup)
         self.btn_setup_wifi.pack(side="right", padx=(0, 5))
 
         # System Actions (Setup, Reset, Close)
@@ -135,7 +145,7 @@ class JTEApp(ctk.CTk):
 
         self.stm32_model_var = ctk.StringVar(value="F3")
         self.stm32_model_menu = ctk.CTkOptionMenu(fw_opts_frame, variable=self.stm32_model_var,
-                                                 values=["F3", "G4"], width=60)
+                                                 values=["F3", "G4"], width=60, fg_color="gray30", text_color="white")
         self.stm32_model_menu.pack(side="left", padx=(0, 10))
 
         self.format_after_flash_var = ctk.BooleanVar(value=False)
@@ -145,7 +155,7 @@ class JTEApp(ctk.CTk):
         self.cb_format_after_flash.pack(side="left")
 
         # Main Flash Actions
-        self.btn_flash = ctk.CTkButton(self.navigation_frame, text="FLASH (Upload + Write)", 
+        self.btn_flash = ctk.CTkButton(self.navigation_frame, text="FLASH (Upload + Write)", fg_color=color_third, hover_color=color_hover,
                                       font=ctk.CTkFont(weight="bold"), command=self.start_file_transfer)
         self.btn_flash.pack(pady=(10, 2), padx=10, fill="x")
 
