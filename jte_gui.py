@@ -22,6 +22,8 @@ color_secondary = "#563457"
 color_third = "#38667e"
 color_fourth = "#6a994e"
 
+ctk.set_appearance_mode("system")  # Modalità: "light", "dark", "system"
+ctk.set_default_color_theme("dark-blue")  # Temi: "blue", "dark-blue", "green", "dark-green", "orange", "dark-orange"
 class JTEApp(ctk.CTk):
     """
     Classe principale dell'applicazione.
@@ -70,116 +72,142 @@ class JTEApp(ctk.CTk):
         self.navigation_frame.grid(row=0, column=0, sticky="nsew")
         self.navigation_frame.grid_rowconfigure(4, weight=1)
         
-        self.version_label = ctk.CTkLabel(self.navigation_frame, text="Not connected", font=ctk.CTkFont(size=12))
-        self.version_label.pack(pady=(0, 10))
+        # Status Row
+        self.status_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        self.status_frame.pack(pady=(0, 10))
+
+        self.status_dot = ctk.CTkLabel(self.status_frame, text="●", text_color="gray", font=ctk.CTkFont(size=18))
+        self.status_dot.pack(side="left", padx=(0, 5))
+
+        self.version_label = ctk.CTkLabel(self.status_frame, text="Not connected", font=ctk.CTkFont(size=12))
+        self.version_label.pack(side="left")
+        
+        self.last_data_receive_time = 0
+        self.check_connection_health()
+
+        # --- FILE SELECTION (COMMON) ---
+        ctk.CTkLabel(self.navigation_frame, text="Firmware File", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(15, 0))
+        self.hex_path_var = ctk.StringVar(value="")
+        self.btn_select_hex = ctk.CTkButton(self.navigation_frame, text="Select HEX/BIN File", 
+                                           fg_color="gray25", hover_color="gray20", command=self.select_hex_file)
+        self.btn_select_hex.pack(pady=5, padx=10, fill="x")
 
         # --- CONNECTION & CONTROL ---
-        ctk.CTkLabel(self.navigation_frame, text="Connection", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        ctk.CTkLabel(self.navigation_frame, text="Connection & Update", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(10, 0))
+        self.tabview = ctk.CTkTabview(self.navigation_frame, width=100, fg_color="grey20")
+        self.tabview.pack(pady=5, padx=10, fill="x")
+        self.tabview.add("Serial")
+        self.tabview.add("WiFi")
+
+        # --- SERIAL TAB ---
+        serial_tab = self.tabview.tab("Serial")
         
-        # Seriale
-        serial_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent", border_width=1, border_color="#322b50")
-        serial_frame.pack(pady=5, padx=10, fill="x")
-        
+        # Connection
         self.port_var = ctk.StringVar(value="Serial port")
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        self.port_menu = ctk.CTkOptionMenu(serial_frame, variable=self.port_var, 
+        self.port_menu = ctk.CTkOptionMenu(serial_tab, variable=self.port_var, 
                                           values=ports if ports else ["No ports"],
-                                          width=100, fg_color="gray25")
-        self.port_menu.pack(side="left", padx=(0, 2))
+                                          width=160, fg_color="gray25")
+        self.port_menu.pack(pady=(5, 5), padx=10)
 
-        self.btn_connect_serial = ctk.CTkButton(serial_frame, text="Connect",fg_color=color_secondary, hover_color=color_hover, width=60, 
+        serial_btns_frame = ctk.CTkFrame(serial_tab, fg_color="transparent")
+        serial_btns_frame.pack(pady=5, padx=10, fill="x")
+        
+        self.btn_refresh_ports = ctk.CTkButton(serial_btns_frame, text="Refresh", fg_color=color_secondary, hover_color=color_hover, width=40, command=self.refresh_ports)
+        self.btn_refresh_ports.pack(side="left", padx=2, expand=True, fill="x")
+
+        self.btn_connect_serial = ctk.CTkButton(serial_btns_frame, text="Connect", fg_color=color_primary, hover_color=color_hover, width=40, 
                                                command=lambda: self.connect_serial(self.port_var.get()))
-        self.btn_connect_serial.pack(side="left", padx=(0, 2))
+        self.btn_connect_serial.pack(side="left", padx=2, expand=True, fill="x")
+        
+        self.btn_reset_serial = ctk.CTkButton(serial_tab, text="Reset MCU", fg_color="#A02020", hover_color="#801010", 
+                                      command=self.perform_reset)
+        self.btn_reset_serial.pack(pady=5, padx=10, fill="x")
 
-        self.btn_refresh_ports = ctk.CTkButton(serial_frame, text="Refresh",fg_color=color_secondary, hover_color=color_hover, width=80, command=self.refresh_ports)
-        self.btn_refresh_ports.pack(side="left")
+        # Firmware
+        ctk.CTkLabel(serial_tab, text="UART Flash", font=ctk.CTkFont(size=11, weight="bold")).pack(pady=(10, 0))
+        self.btn_flash_uart = ctk.CTkButton(serial_tab, text="Direct UART FLASH", fg_color=color_third, hover_color=color_hover,
+                                          font=ctk.CTkFont(weight="bold"), command=lambda: self.start_file_transfer(force_uart=True))
+        self.btn_flash_uart.pack(pady=(5, 10), padx=10, fill="x")
 
-        # WiFi
+
+        # --- WIFI TAB ---
+        wifi_tab = self.tabview.tab("WiFi")
+        
+        # Connection
+        # WiFi Top Row (Menu + Scan + Connect)
+        wifi_row_frame = ctk.CTkFrame(wifi_tab, fg_color="transparent")
+        wifi_row_frame.pack(pady=5, padx=5, fill="x")
+
+        # Inizializza i dispositivi caricandoli dalla config
         self.config_file = "config.json"
         config = load_config(self.config_file)
         self.wifi_devices = config.get("wifi_devices", {"192.168.50.100": "Default"})
+
+        # Mostriamo solo il Nome per risparmiare spazio
+        self.wifi_display_list = [name for ip, name in self.wifi_devices.items()]
         
-        self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
         self.tcp_device_var = ctk.StringVar(value=self.wifi_display_list[0] if self.wifi_display_list else "")
-        
-        wifi_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent", border_width=1, border_color="#322b50")
-        wifi_frame.pack(pady=5, padx=10, fill="x")
-        
-        self.tcp_menu = ctk.CTkOptionMenu(wifi_frame, variable=self.tcp_device_var, 
+        self.tcp_menu = ctk.CTkOptionMenu(wifi_row_frame, variable=self.tcp_device_var, 
                                          values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
-                                         command=self.on_connect_wifi_click, width=140, fg_color="gray25")
-        self.tcp_menu.pack(side="left", padx=(0, 5))
-        self.tcp_menu.bind("<Button-1>", lambda e: self.start_scan())
+                                         width=120, fg_color="gray25")
+        self.tcp_menu.pack(side="left", padx=2)
 
-        self.btn_scan_tcp = ctk.CTkButton(wifi_frame, text="Scan",fg_color=color_primary, hover_color=color_hover, width=30, command=self.start_scan)
-        self.btn_scan_tcp.pack(side="left")
+        self.btn_scan_tcp = ctk.CTkButton(wifi_row_frame, text="Scan", fg_color=color_primary, hover_color=color_hover, width=30, command=self.start_scan)
+        self.btn_scan_tcp.pack(side="left", padx=2)
 
-        self.btn_setup_wifi = ctk.CTkButton(wifi_frame, text="Setup Bridge",fg_color=color_primary, hover_color=color_hover, width=85, command=self.open_wifi_setup)
-        self.btn_setup_wifi.pack(side="right", padx=(0, 5))
+        self.btn_connect_wifi = ctk.CTkButton(wifi_row_frame, text="Connect", fg_color=color_primary, hover_color=color_hover, width=30, 
+                                              command=lambda: self.on_connect_wifi_click(self.tcp_device_var.get()))
+        self.btn_connect_wifi.pack(side="left", padx=2)
 
-        # System Actions (Setup, Reset, Close)
-        sys_actions_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
-        sys_actions_frame.pack(pady=5, padx=10, fill="x")
+        self.btn_setup_wifi = ctk.CTkButton(wifi_row_frame, text="Setup JWI", fg_color=color_primary, hover_color=color_hover, width=30,command=self.open_wifi_setup)
+        self.btn_setup_wifi.pack(side="right", padx=2, fill="x", expand=False)
 
-        
+        self.btn_reset_wifi = ctk.CTkButton(wifi_tab, text="Reset", fg_color="gray30", hover_color="#801010", 
+                                      command=self.perform_reset)
+        self.btn_reset_wifi.pack(pady=5, padx=2, fill="x")
 
-        self.btn_reset = ctk.CTkButton(sys_actions_frame, text="Reset", fg_color="#A02020", hover_color="#801010", 
-                                      command=self.perform_reset, width=40)
-        self.btn_reset.pack(side="left", padx=(0, 5), expand=True, fill="x")
-
-        self.btn_disconnect = ctk.CTkButton(sys_actions_frame, text="Close", fg_color="gray30", hover_color="gray20",
-                                           command=self.disconnect, width=40)
-        self.btn_disconnect.pack(side="left", expand=True, fill="x")
-
-        # --- FIRMWARE ---
-        ctk.CTkLabel(self.navigation_frame, text="Firmware Update", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=(15, 0))
-        
-        self.hex_path_var = ctk.StringVar(value="")
-        self.btn_select_hex = ctk.CTkButton(self.navigation_frame, text="Select HEX File", 
-                                           fg_color="gray25", hover_color="gray20", command=self.select_hex_file)
-        self.btn_select_hex.pack(pady=5, padx=10, fill="x")
-        
-        # Opzioni Firmware Row
-        fw_opts_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        # Firmware
+        ctk.CTkLabel(wifi_tab, text="Bridge Flash Options", font=ctk.CTkFont(size=11, weight="bold")).pack(pady=(10, 0))
+        fw_opts_frame = ctk.CTkFrame(wifi_tab, fg_color="transparent")
         fw_opts_frame.pack(pady=2, padx=10, fill="x")
 
         self.stm32_model_var = ctk.StringVar(value="F3")
         self.stm32_model_menu = ctk.CTkOptionMenu(fw_opts_frame, variable=self.stm32_model_var,
                                                  values=["F3", "G4"], width=60, fg_color="gray30", text_color="white")
-        self.stm32_model_menu.pack(side="left", padx=(0, 10))
+        self.stm32_model_menu.pack(side="left", padx=(0, 5))
 
         self.format_after_flash_var = ctk.BooleanVar(value=False)
         self.cb_format_after_flash = ctk.CTkCheckBox(fw_opts_frame, text="Format FS", 
                                                     variable=self.format_after_flash_var,
                                                     font=ctk.CTkFont(size=11), width=20)
-        self.cb_format_after_flash.pack(side="left")
+        self.cb_format_after_flash.pack(side="right")
 
-        # Main Flash Actions
-        self.btn_flash = ctk.CTkButton(self.navigation_frame, text="FLASH (Upload + Write)", fg_color=color_third, hover_color=color_hover,
+        self.btn_flash_wifi = ctk.CTkButton(wifi_tab,width=40, text="Flash", fg_color=color_third, hover_color=color_hover,
                                       font=ctk.CTkFont(weight="bold"), command=self.start_file_transfer)
-        self.btn_flash.pack(pady=(10, 2), padx=10, fill="x")
+        self.btn_flash_wifi.pack(pady=(5, 2), padx=2, fill="x")
 
-        self.uart_flash_var = ctk.BooleanVar(value=False)
-        self.cb_uart_flash = ctk.CTkCheckBox(self.navigation_frame, text="Direct UART Flash", 
-                                            variable=self.uart_flash_var, font=ctk.CTkFont(size=11))
-        self.cb_uart_flash.pack(pady=(0, 5), padx=10, fill="x")
-
-        # Extra Flash Actions Row
-        extra_fw_frame = ctk.CTkFrame(self.navigation_frame, fg_color="transparent")
+        extra_fw_frame = ctk.CTkFrame(wifi_tab, fg_color="transparent")
         extra_fw_frame.pack(pady=0, padx=10, fill="x")
 
-        self.btn_upload_only = ctk.CTkButton(extra_fw_frame, text="Upload", height=24, font=ctk.CTkFont(size=11),
+        self.btn_upload_only = ctk.CTkButton(extra_fw_frame, width=50, text="Up", height=24, font=ctk.CTkFont(size=11),
                                             fg_color="gray30", command=lambda: self.start_file_transfer(mode="upload"))
-        self.btn_upload_only.pack(side="left", padx=(0, 2), expand=True, fill="x")
+        self.btn_upload_only.pack(side="left", padx=(0, 2), expand=False, fill="x")
 
-        self.btn_flash_only = ctk.CTkButton(extra_fw_frame, text="Write Only", height=24, font=ctk.CTkFont(size=11),
+        self.btn_flash_only = ctk.CTkButton(extra_fw_frame, width=50, text="Wr", height=24, font=ctk.CTkFont(size=11),
                                            fg_color="gray30", command=lambda: self.start_file_transfer(mode="flash"))
-        self.btn_flash_only.pack(side="left", padx=(2, 2), expand=True, fill="x")
+        self.btn_flash_only.pack(side="left", padx=(2, 2), expand=False, fill="x")
 
-        self.btn_format = ctk.CTkButton(extra_fw_frame, text="Format", height=24, font=ctk.CTkFont(size=11),
+        self.btn_format = ctk.CTkButton(extra_fw_frame, width=50, text="Fmt", height=24, font=ctk.CTkFont(size=11),
                                        fg_color="gray30", command=self.start_format_spiffs)
-        self.btn_format.pack(side="left", padx=(2, 0), expand=True, fill="x")
-        
+        self.btn_format.pack(side="left", padx=(2, 0), expand=False, fill="x")
+
+
+        # Global Action & Status
+        self.btn_disconnect = ctk.CTkButton(self.navigation_frame, text="Close Connection", fg_color="darkred", hover_color="red",
+                                           command=self.disconnect)
+        self.btn_disconnect.pack(pady=(10, 5), padx=20, fill="x")
+
         self.progress_bar = ctk.CTkProgressBar(self.navigation_frame)
         self.progress_bar.set(0)
         self.progress_bar.pack(pady=(10, 2), padx=10, fill="x")
@@ -203,7 +231,7 @@ class JTEApp(ctk.CTk):
         self.plot_ctrl_frame.pack(fill="x", side="top", padx=5, pady=(2, 0))
 
         # Pulsante Pausa Plot (ora visibile sopra il grafico)
-        self.btn_pause_plot = ctk.CTkButton(self.plot_ctrl_frame, text="⏸ Pause", width=70, height=22,
+        self.btn_pause_plot = ctk.CTkButton(self.plot_ctrl_frame, text="Pause", width=70, height=22,
                                            fg_color="#3a3a3a", hover_color="#505050", font=ctk.CTkFont(size=11),
                                            command=self.toggle_plot_pause)
         self.btn_pause_plot.pack(side="right", padx=5)
@@ -213,8 +241,14 @@ class JTEApp(ctk.CTk):
         self.port_menu.configure(values=ports if ports else ["No Serial Port"])
 
     def on_connect_wifi_click(self, selection):
-        if "(" in selection and ")" in selection:
-            ip = selection.split("(")[1].split(")")[0]
+        # Cerca l'IP corrispondente al nome selezionato
+        ip = None
+        for device_ip, name in self.wifi_devices.items():
+            if name == selection or f"{name} ({device_ip})" == selection:
+                ip = device_ip
+                break
+        
+        if ip:
             self.connected_ip = ip
             self.connect_serial(ip, is_tcp=True)
 
@@ -261,11 +295,23 @@ class JTEApp(ctk.CTk):
 
     def update_action_buttons_state(self, loading=False):
         state = "normal" if self.running and not loading else "disabled"
-        for btn in [self.btn_disconnect, self.btn_flash, self.btn_format, self.btn_reset, self.btn_upload_only, self.btn_flash_only]:
+        # Pulsanti attivi solo quando connessi
+        action_btns = [self.btn_disconnect, self.btn_flash_wifi, self.btn_format, 
+                       self.btn_upload_only, self.btn_flash_only]
+        
+        if hasattr(self, 'btn_reset_serial'): action_btns.append(self.btn_reset_serial)
+        if hasattr(self, 'btn_reset_wifi'): action_btns.append(self.btn_reset_wifi)
+            
+        for btn in action_btns:
             btn.configure(state=state)
-        # Abilita Connetti solo se non siamo già in corsa
-        if hasattr(self, 'btn_connect_serial'):
-            self.btn_connect_serial.configure(state="disabled" if self.running else "normal")
+            
+        # Pulsanti connetti e Flash UART (abilitati se non in caricamento)
+        conn_state = "disabled" if self.running or loading else "normal"
+        flash_uart_state = "disabled" if loading else "normal" # Può flashare UART anche se non connesso via protocollo
+        
+        if hasattr(self, 'btn_connect_serial'): self.btn_connect_serial.configure(state=conn_state)
+        if hasattr(self, 'btn_connect_wifi'): self.btn_connect_wifi.configure(state=conn_state)
+        if hasattr(self, 'btn_flash_uart'): self.btn_flash_uart.configure(state=flash_uart_state)
 
     def pause_bridge(self):
         self.is_suspended = True
@@ -280,25 +326,27 @@ class JTEApp(ctk.CTk):
         threading.Thread(target=self.network_scanner.scan_network_thread, daemon=True).start()
 
     def finish_scan(self, found_devices):
-        self.btn_scan_tcp.configure(text="Rescan", state="normal")
+        self.btn_scan_tcp.configure(text="Scan", state="normal")
         new_devices = found_devices.copy()
         for ip, name in self.wifi_devices.items():
             if ip not in new_devices and ip == self.connected_ip:
                 new_devices[ip] = name
         
         self.wifi_devices = new_devices
-        self.wifi_display_list = [f"{name} ({ip})" for ip, name in self.wifi_devices.items()]
+        # Aggiorniamo la lista display con solo i nomi
+        self.wifi_display_list = [name for ip, name in self.wifi_devices.items()]
         
         if not self.wifi_display_list:
             self.tcp_menu.configure(values=["No devices found"])
             self.tcp_device_var.set("No devices found")
         else:
             self.tcp_menu.configure(values=self.wifi_display_list)
-            target_ip = self.connected_ip if self.connected_ip else None
-            new_selection = next((item for item in self.wifi_display_list if target_ip and f"({target_ip})" in item), None)
+            # Ripristino selezione basato su nome o IP connesso
+            target_name = self.wifi_devices.get(self.connected_ip) if self.connected_ip else None
             
-            if new_selection: self.tcp_device_var.set(new_selection)
-            elif self.wifi_display_list and self.tcp_device_var.get() not in self.wifi_display_list:
+            if target_name and target_name in self.wifi_display_list:
+                self.tcp_device_var.set(target_name)
+            elif self.wifi_display_list:
                 self.tcp_device_var.set(self.wifi_display_list[0])
         
         save_config({"wifi_devices": self.wifi_devices}, self.config_file)
@@ -313,20 +361,13 @@ class JTEApp(ctk.CTk):
             self.btn_select_hex.configure(text=os.path.basename(path), text_color="#40A040")
             self.progress_label.configure(text=f"Ready: {os.path.basename(path)}", text_color="gray")
 
-    def start_file_transfer(self, mode="both"):
+    def start_file_transfer(self, mode="both", force_uart=False):
         file_path = self.hex_path_var.get()
         if not file_path:
             self.progress_label.configure(text="Select a file first!", text_color="red")
             return
         
-        selection = self.tcp_device_var.get()
-        if "(" not in selection:
-            self.progress_label.configure(text="Select a WiFi device!", text_color="red")
-            return
-        
-        ip = selection.split("(")[1].split(")")[0]
-        
-        if self.uart_flash_var.get():
+        if force_uart:
             # Modalità UART Diretta
             port = self.port_var.get()
             if not port or port in ["Nessuna Porta", "No Serial Port", "Serial port"]:
@@ -338,6 +379,12 @@ class JTEApp(ctk.CTk):
             threading.Thread(target=self.uart_flash_thread, args=(port, file_path), daemon=True).start()
         else:
             # Modalità WiFi Bridge (esistente)
+            selection = self.tcp_device_var.get()
+            if "(" not in selection:
+                self.progress_label.configure(text="Select a WiFi device!", text_color="red")
+                return
+            
+            ip = selection.split("(")[1].split(")")[0]
             self.pause_bridge()
             self.update_action_buttons_state(loading=True)
             threading.Thread(target=self.file_manager.file_transfer_thread, 
@@ -401,10 +448,10 @@ class JTEApp(ctk.CTk):
         if not hasattr(self, 'plot_manager'): return
         paused = self.plot_manager.toggle_pause()
         if paused:
-            self.btn_pause_plot.configure(text="▶ Resume", fg_color="#40A040", hover_color="#308030")
+            self.btn_pause_plot.configure(text="Resume", fg_color="#40A040", hover_color="#308030")
             self.progress_label.configure(text="Plot Paused", text_color="orange")
         else:
-            self.btn_pause_plot.configure(text="⏸ Pause", fg_color="#3a3a3a", hover_color="#505050")
+            self.btn_pause_plot.configure(text="Pause", fg_color="#3a3a3a", hover_color="#505050")
             self.progress_label.configure(text="Plot Resumed (Cleared)", text_color="green")
 
     def toggle_plot_variable(self, idx, is_active):
@@ -431,7 +478,11 @@ class JTEApp(ctk.CTk):
         # Ripristino Opzioni
         self.stm32_model_var.set(config.get("stm32_model", "F3"))
         self.format_after_flash_var.set(config.get("format_after_flash", False))
-        self.uart_flash_var.set(config.get("uart_flash", False))
+        
+        # Ripristino Tab
+        last_tab = config.get("last_tab", "Serial")
+        if last_tab in ["Serial", "WiFi"]:
+            self.tabview.set(last_tab)
         
         # Ripristino Porte (se ancora presenti)
         last_port = config.get("last_port", "")
@@ -449,9 +500,9 @@ class JTEApp(ctk.CTk):
             "last_hex_path": self.hex_path_var.get(),
             "stm32_model": self.stm32_model_var.get(),
             "format_after_flash": self.format_after_flash_var.get(),
-            "uart_flash": self.uart_flash_var.get(),
             "last_port": self.port_var.get(),
-            "last_wifi_device": self.tcp_device_var.get()
+            "last_wifi_device": self.tcp_device_var.get(),
+            "last_tab": self.tabview.get()
         }
         save_config(config, self.config_file)
 
@@ -539,6 +590,9 @@ class JTEApp(ctk.CTk):
 
     def update_ui_values(self):
         if not self.jte_comm or not self.winfo_exists(): return
+        self.last_data_receive_time = time.time()
+        self.status_dot.configure(text_color="#2ecc71") # Green
+        
         for var in self.jte_comm.variables:
             idx = var['index']
             val_str = var['value']
@@ -546,6 +600,16 @@ class JTEApp(ctk.CTk):
             if row: row.update_value(val_str)
             if idx in self.plot_manager.plotted_indices:
                 self.plot_manager.add_value(idx, val_str)
+
+    def check_connection_health(self):
+        """Controlla se i dati stanno arrivando regolarmente."""
+        if self.running and (time.time() - self.last_data_receive_time > 1.2):
+            self.status_dot.configure(text_color="gray")
+        
+        if not self.running:
+            self.status_dot.configure(text_color="gray")
+            
+        self.after(500, self.check_connection_health)
 
 if __name__ == "__main__":
     app = JTEApp()
