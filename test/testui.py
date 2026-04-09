@@ -43,7 +43,7 @@ combobox_1 = customtkinter.CTkComboBox(frame_1, values=["Option 1", "Option 2", 
 combobox_1.pack(pady=10, padx=10)
 combobox_1.set("CTkComboBox")
 
-checkbox_1 = customtkinter.CTkCheckBox(master=frame_1)
+checkbox_1 = customtkinter.CTkCheckBox(master=frame_1, border_width=1,width=10, height=10, corner_radius=15)
 checkbox_1.pack(pady=10, padx=10)
 
 radiobutton_var = customtkinter.IntVar(value=1)

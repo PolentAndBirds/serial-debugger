@@ -28,14 +28,14 @@ class VariableRow(ctk.CTkFrame):
             self.plus_btn = ctk.CTkButton(self, text="+", width=30, command=lambda: self.on_modify(var_data['index'], '+'))
             self.plus_btn.pack(side="right", padx=2)
             
-            self.dmin_btn = ctk.CTkButton(self, text="--", width=40, command=lambda: self.on_modify(var_data['index'], '/'))
+            self.dmin_btn = ctk.CTkButton(self, text="--", width=30, command=lambda: self.on_modify(var_data['index'], '/'))
             self.dmin_btn.pack(side="right", padx=2)
             
-            self.dplus_btn = ctk.CTkButton(self, text="++", width=40, command=lambda: self.on_modify(var_data['index'], '*'))
+            self.dplus_btn = ctk.CTkButton(self, text="++", width=30, command=lambda: self.on_modify(var_data['index'], '*'))
             self.dplus_btn.pack(side="right", padx=2)
 
         # Checkbox per il plotting
-        self.plot_cb = ctk.CTkCheckBox(self, text="Plot", width=40, 
+        self.plot_cb = ctk.CTkCheckBox(self, text="Plot", text_color="#aaaaaa", border_width=1,width=10, height=10, corner_radius=5, fg_color="#40A040", hover_color="#308030",
                                       command=lambda: self.on_plot_toggle(var_data['index'], self.plot_cb.get()))
         
         if is_plotted or var_data['step_type'] in ['1', '2']:
