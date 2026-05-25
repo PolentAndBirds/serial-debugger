@@ -148,10 +148,18 @@ class JTEApp(ctk.CTk):
         self.wifi_display_list = [name for ip, name in self.wifi_devices.items()]
         
         self.tcp_device_var = ctk.StringVar(value=self.wifi_display_list[0] if self.wifi_display_list else "")
-        self.tcp_menu = ctk.CTkOptionMenu(wifi_row_frame, variable=self.tcp_device_var, 
+        # Menu e Label del tipo (vicini)
+        self.wifi_menu_container = ctk.CTkFrame(wifi_row_frame, fg_color="transparent")
+        self.wifi_menu_container.pack(side="left", padx=2)
+
+        self.tcp_menu = ctk.CTkOptionMenu(self.wifi_menu_container, variable=self.tcp_device_var, 
                                          values=self.wifi_display_list if self.wifi_display_list else ["No devices"],
-                                         width=120, fg_color="gray25")
-        self.tcp_menu.pack(side="left", padx=2)
+                                         width=140, fg_color="gray25", command=self.update_wifi_type_display)
+        self.tcp_menu.pack(pady=(0, 0))
+
+        self.wifi_type_label = ctk.CTkLabel(self.wifi_menu_container, text="", font=ctk.CTkFont(size=10, slant="italic"), text_color="gray70")
+        self.wifi_type_label.pack(pady=(0, 0))
+
 
         self.btn_scan_tcp = ctk.CTkButton(wifi_row_frame, text="Scan", fg_color=color_primary, hover_color=color_hover, width=30, command=self.start_scan)
         self.btn_scan_tcp.pack(side="left", padx=2)
@@ -354,10 +362,35 @@ class JTEApp(ctk.CTk):
                 self.tcp_device_var.set(target_name)
             elif self.wifi_display_list:
                 self.tcp_device_var.set(self.wifi_display_list[0])
+            
+            self.update_wifi_type_display(self.tcp_device_var.get())
+
         
         save_config({"wifi_devices": self.wifi_devices}, self.config_file)
 
+    def update_wifi_type_display(self, selection):
+        """Aggiorna la label del tipo macchina basandosi sulla selezione."""
+        if " | " in selection:
+            try:
+                parts = selection.split(" | ")
+                mtype = parts[-1].strip()
+                self.wifi_type_label.configure(text=f"Model: {mtype}")
+            except:
+                self.wifi_type_label.configure(text="")
+        elif " - " in selection:
+             # Backward compatibility
+             try:
+                parts = selection.split(" - ")
+                mtype = parts[-1].strip()
+                self.wifi_type_label.configure(text=f"Model: {mtype}")
+             except:
+                self.wifi_type_label.configure(text="")
+        else:
+            self.wifi_type_label.configure(text="")
+
+
     def open_wifi_setup(self):
+
         WiFiSetupDialog(self)
 
     def select_hex_file(self):

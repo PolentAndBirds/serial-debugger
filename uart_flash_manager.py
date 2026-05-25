@@ -192,6 +192,17 @@ class STM32FlashManager:
 
             # Procedura 5: Reset finale
             self._set_signals_exit()
+            
+            # Attesa breve per vedere se il firmware invia errori subito dopo il boot
+            time.sleep(0.5)
+            if self.ser.in_waiting:
+                try:
+                    res = self.ser.read(self.ser.in_waiting).decode(errors='ignore')
+                    if "+ERROR:" in res:
+                        raise Exception(f"Firmware error: {res.strip()}")
+                except:
+                    pass
+
             return True
         except Exception as e:
             print(f"Errore: {e}")

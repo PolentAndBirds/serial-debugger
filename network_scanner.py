@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 
 class NetworkScanner:
     """
@@ -21,21 +22,42 @@ class NetworkScanner:
             threads = []
             def check_ip(ip):
                 try:
+                    # Collegamento 1: Recupero Nome
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.5)
-                    result = sock.connect_ex((ip, 9000))
-                    if result == 0:
+                    sock.settimeout(0.8)
+                    if sock.connect_ex((ip, 9000)) == 0:
                         sock.sendall(b"AT+NAME?\r\n")
-                        raw_name = sock.recv(64).decode('ascii', errors='ignore').strip()
+                        time.sleep(0.1)
+                        raw_name = sock.recv(512).decode('ascii', errors='ignore').strip()
+                        sock.close()
                         
-                        name_resp = ""
+                        name_resp = "ESP32-Bridge"
                         if "+NAME=" in raw_name:
-                            name_resp = raw_name.split("+NAME=")[1].split("\r")[0].split("\n")[0].strip()
+                            try:
+                                core_name = raw_name.split("+NAME=")[1].split("\r")[0].split("\n")[0].strip()
+                                name_resp = f"JWI-{core_name}"
+                            except: pass
                         
-                        if not name_resp or "AT+" in name_resp:
-                            name_resp = "ESP32-Bridge"
                         found_devices[ip] = name_resp
-                    sock.close()
+                        
+                        # Collegamento 2: Recupero Tipo Macchina (Sessione separata per stabilità)
+                        try:
+                            sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock2.settimeout(0.8)
+                            if sock2.connect_ex((ip, 9000)) == 0:
+                                sock2.sendall(b"AT+MACHINE=?\r\n")
+                                time.sleep(0.1)
+                                raw_type = sock2.recv(512).decode('ascii', errors='ignore').strip()
+                                if "+MACHINE=" in raw_type:
+                                    try:
+                                        type_resp = raw_type.split("+MACHINE=")[1].split("\r")[0].split("\n")[0].strip()
+                                        found_devices[ip] = f"{name_resp} | {type_resp}"
+                                    except: pass
+                            sock2.close()
+                        except:
+                            pass
+                            
+                        print(f"Scanned {ip}: {found_devices.get(ip)}")
                 except: pass
 
             for i in range(1, 255):

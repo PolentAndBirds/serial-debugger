@@ -28,6 +28,7 @@ class FileManager:
                     s.sendall(f"AT+FSTART={file_size},{filename}\r".encode())
                     
                     response = s.recv(1024).decode(errors='ignore')
+                    print(f"RX -> {response}")
                     if "OK" in response:
                         self.app.after(0, lambda: self.app.progress_label.configure(text="Uploading...", text_color="cyan"))
                         bytes_sent = 0
@@ -48,6 +49,7 @@ class FileManager:
                         
                         self.app.after(0, lambda: self.app.progress_label.configure(text="Finalizing Upload...", text_color="orange"))
                         final_response = s.recv(1024).decode(errors='ignore')
+                        print(f"RX -> {final_response}")
                         
                         if "OK" not in final_response:
                             self.app.after(0, lambda: self.app.progress_label.configure(text=f"Upload Error: {final_response.strip()}", text_color="red"))
@@ -92,6 +94,10 @@ class FileManager:
                                     self.app.after(0, lambda l=line: self.app.progress_label.configure(text=f"Error: {l}", text_color="red"))
                                     return
                                 
+                                elif "+ERROR:" in line:
+                                    self.app.after(0, lambda l=line: self.app.progress_label.configure(text=f"Error: {l}", text_color="red"))
+                                    return
+                                
                                 elif "+SUCCESS:" in line:
                                     info = line.split(":", 1)[1].strip()
                                     self.app.after(0, lambda i=info: self.app.progress_label.configure(text=f"Success: {i}", text_color="green"))
@@ -118,6 +124,7 @@ class FileManager:
                 s.connect((ip, 9000))
                 s.sendall(b"AT+FFMT\r")
                 response = s.recv(1024).decode(errors='ignore')
+                print(f"RX -> {response}")
                 if "OK" not in response:
                     raise Exception(f"Format rejected: {response}")
                 
